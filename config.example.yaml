@@ -1,0 +1,27 @@
+# Polybotz Configuration
+# Copy this file to config.yaml and fill in your values
+
+# Event slugs to monitor
+# Find slugs from Polymarket URLs: https://polymarket.com/event/{slug}
+slugs:
+  - "will-trump-win-the-2024-us-presidential-election"
+  - "bitcoin-above-100000-on-december-31"
+
+# Polling interval in seconds (minimum: 10, default: 60)
+poll_interval: 60
+
+# Percentage change threshold to trigger alert (default: 5.0)
+# A spike is detected when price changes by this percentage between polls
+spike_threshold: 5.0
+
+# Telegram configuration
+telegram:
+  # Bot token from @BotFather
+  # Can also be set via TELEGRAM_BOT_TOKEN environment variable
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+
+  # Chat ID to send alerts to
+  # For personal chat: message @userinfobot
+  # For groups: add bot to group, send message, check updates API
+  # Can also be set via TELEGRAM_CHAT_ID environment variable
+  chat_id: "${TELEGRAM_CHAT_ID}"
