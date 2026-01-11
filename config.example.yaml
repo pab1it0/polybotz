@@ -14,6 +14,11 @@ poll_interval: 60
 # A spike is detected when price changes by this percentage between polls
 spike_threshold: 5.0
 
+# LVR (Liquidity-to-Volume Ratio) threshold for liquidity warnings (default: 8.0)
+# A Liquidity Warning is triggered when price spikes AND LVR exceeds this threshold
+# Lower values = more sensitive, Higher values = only flag severe imbalances
+lvr_threshold: 8.0
+
 # Telegram configuration
 telegram:
   # Bot token from @BotFather

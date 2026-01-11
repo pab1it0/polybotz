@@ -8,8 +8,8 @@ from pathlib import Path
 
 from .config import ConfigurationError, load_config
 from .poller import parse_event_response, validate_slugs, poll_all_events
-from .detector import detect_all_spikes
-from .alerter import send_all_alerts
+from .detector import detect_all_spikes, detect_all_liquidity_warnings
+from .alerter import send_all_alerts, send_all_liquidity_warnings
 from .models import MonitoredEvent
 
 import httpx
@@ -52,6 +52,15 @@ async def run_poll_cycle(
     if spikes:
         logger.info(f"Detected {len(spikes)} spike(s)")
         await send_all_alerts(spikes, config)
+
+        # Detect liquidity warnings for spikes with high LVR
+        warnings = detect_all_liquidity_warnings(
+            list(events.values()),
+            spikes,
+            config.lvr_threshold,
+        )
+        if warnings:
+            await send_all_liquidity_warnings(warnings, config)
     else:
         logger.debug("No spikes detected")
 

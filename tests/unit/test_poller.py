@@ -525,3 +525,147 @@ class TestPollAllEvents:
             await poll_all_events(mock_client, events)
 
         assert "Polling event" in caplog.text
+
+
+class TestParseEventResponseWithLvr:
+    """Tests for parse_event_response with volume/liquidity data."""
+
+    def test_parse_volume_and_liquidity(self, gamma_api_response_with_lvr):
+        """Test parsing volume24hr and liquidityNum from response."""
+        result = parse_event_response(gamma_api_response_with_lvr)
+
+        # Find the first market (cond-001)
+        market = next(m for m in result.markets if m.question == "Will outcome A happen?" and m.outcome == "Yes")
+
+        assert market.volume_24h == 1000000.0
+        assert market.liquidity == 500000.0
+
+    def test_parse_different_volumes_per_market(self, gamma_api_response_with_lvr):
+        """Test that different markets have different volume/liquidity values."""
+        result = parse_event_response(gamma_api_response_with_lvr)
+
+        market_a = next(m for m in result.markets if m.question == "Will outcome A happen?" and m.outcome == "Yes")
+        market_b = next(m for m in result.markets if m.question == "Will outcome B happen?" and m.outcome == "Yes")
+
+        assert market_a.volume_24h == 1000000.0
+        assert market_a.liquidity == 500000.0
+        assert market_b.volume_24h == 200000.0
+        assert market_b.liquidity == 100000.0
+
+    def test_parse_missing_volume_liquidity(self, gamma_api_response):
+        """Test parsing when volume/liquidity are missing."""
+        result = parse_event_response(gamma_api_response)
+
+        for market in result.markets:
+            assert market.volume_24h is None
+            assert market.liquidity is None
+
+    def test_parse_zero_liquidity(self, gamma_api_response_zero_liquidity):
+        """Test parsing zero liquidity."""
+        result = parse_event_response(gamma_api_response_zero_liquidity)
+
+        market = result.markets[0]
+        assert market.volume_24h == 100000.0
+        assert market.liquidity == 0
+
+    def test_parse_invalid_volume_format(self):
+        """Test handling invalid volume format."""
+        data = {
+            "slug": "test",
+            "title": "Test",
+            "markets": [
+                {
+                    "conditionId": "c1",
+                    "question": "Q",
+                    "outcomes": '["Yes"]',
+                    "outcomePrices": '["0.5"]',
+                    "closed": False,
+                    "volume24hr": "invalid",
+                    "liquidityNum": 100000.0,
+                }
+            ],
+        }
+        result = parse_event_response(data)
+
+        assert result.markets[0].volume_24h is None
+        assert result.markets[0].liquidity == 100000.0
+
+    def test_parse_invalid_liquidity_format(self):
+        """Test handling invalid liquidity format."""
+        data = {
+            "slug": "test",
+            "title": "Test",
+            "markets": [
+                {
+                    "conditionId": "c1",
+                    "question": "Q",
+                    "outcomes": '["Yes"]',
+                    "outcomePrices": '["0.5"]',
+                    "closed": False,
+                    "volume24hr": 100000.0,
+                    "liquidityNum": "invalid",
+                }
+            ],
+        }
+        result = parse_event_response(data)
+
+        assert result.markets[0].volume_24h == 100000.0
+        assert result.markets[0].liquidity is None
+
+
+class TestUpdatePricesWithLvr:
+    """Tests for update_prices with LVR calculation."""
+
+    def test_update_calculates_lvr(self, gamma_api_response_with_lvr):
+        """Test that update_prices calculates LVR for markets."""
+        initial_event = parse_event_response(gamma_api_response_with_lvr)
+
+        result = update_prices(initial_event, gamma_api_response_with_lvr)
+
+        # Find market with known values
+        market = next(m for m in result.markets if m.question == "Will outcome A happen?" and m.outcome == "Yes")
+
+        # LVR = volume / liquidity = 1000000 / 500000 = 2.0
+        assert market.lvr == 2.0
+
+    def test_update_lvr_for_different_markets(self, gamma_api_response_with_lvr):
+        """Test LVR is calculated correctly for different markets."""
+        initial_event = parse_event_response(gamma_api_response_with_lvr)
+
+        result = update_prices(initial_event, gamma_api_response_with_lvr)
+
+        market_a = next(m for m in result.markets if m.question == "Will outcome A happen?" and m.outcome == "Yes")
+        market_b = next(m for m in result.markets if m.question == "Will outcome B happen?" and m.outcome == "Yes")
+
+        # Market A: 1000000 / 500000 = 2.0
+        assert market_a.lvr == 2.0
+        # Market B: 200000 / 100000 = 2.0
+        assert market_b.lvr == 2.0
+
+    def test_update_lvr_none_for_zero_liquidity(self, gamma_api_response_zero_liquidity):
+        """Test LVR is None when liquidity is zero."""
+        initial_event = parse_event_response(gamma_api_response_zero_liquidity)
+
+        result = update_prices(initial_event, gamma_api_response_zero_liquidity)
+
+        market = result.markets[0]
+        assert market.lvr is None
+
+    def test_update_lvr_none_for_missing_data(self, gamma_api_response):
+        """Test LVR is None when volume/liquidity data is missing."""
+        initial_event = parse_event_response(gamma_api_response)
+
+        result = update_prices(initial_event, gamma_api_response)
+
+        for market in result.markets:
+            assert market.lvr is None
+
+    def test_update_logs_lvr_debug(self, gamma_api_response_with_lvr, caplog):
+        """Test LVR calculation is logged at debug level."""
+        initial_event = parse_event_response(gamma_api_response_with_lvr)
+
+        with caplog.at_level("DEBUG"):
+            update_prices(initial_event, gamma_api_response_with_lvr)
+
+        assert "LVR calculated" in caplog.text
+        assert "LVR=" in caplog.text
