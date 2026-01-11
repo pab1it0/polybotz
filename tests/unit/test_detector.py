@@ -4,8 +4,15 @@ import pytest
 from datetime import datetime
 from unittest.mock import patch
 
-from src.models import MonitoredEvent, MonitoredMarket, SpikeAlert
-from src.detector import detect_spike, detect_all_spikes
+from src.models import LiquidityWarning, MonitoredEvent, MonitoredMarket, SpikeAlert
+from src.detector import (
+    calculate_lvr,
+    classify_lvr_health,
+    detect_all_liquidity_warnings,
+    detect_all_spikes,
+    detect_liquidity_warning,
+    detect_spike,
+)
 
 
 class TestDetectSpike:
@@ -318,3 +325,387 @@ class TestDetectAllSpikes:
 
         assert "Spike detected" in caplog.text
         assert "Total spikes detected" in caplog.text
+
+
+class TestCalculateLvr:
+    """Tests for calculate_lvr function."""
+
+    def test_calculate_lvr_normal(self):
+        """Test LVR calculation with valid values."""
+        result = calculate_lvr(1000000.0, 100000.0)
+        assert result == 10.0
+
+    def test_calculate_lvr_low_ratio(self):
+        """Test LVR with low volume relative to liquidity."""
+        result = calculate_lvr(100000.0, 1000000.0)
+        assert result == 0.1
+
+    def test_calculate_lvr_zero_liquidity(self, caplog):
+        """Test LVR with zero liquidity returns None."""
+        with caplog.at_level("WARNING"):
+            result = calculate_lvr(1000000.0, 0)
+        assert result is None
+        assert "Zero/missing liquidity" in caplog.text
+
+    def test_calculate_lvr_negative_liquidity(self, caplog):
+        """Test LVR with negative liquidity returns None."""
+        with caplog.at_level("WARNING"):
+            result = calculate_lvr(1000000.0, -100.0)
+        assert result is None
+        assert "Zero/missing liquidity" in caplog.text
+
+    def test_calculate_lvr_none_liquidity(self, caplog):
+        """Test LVR with None liquidity returns None."""
+        with caplog.at_level("WARNING"):
+            result = calculate_lvr(1000000.0, None)
+        assert result is None
+        assert "Zero/missing liquidity" in caplog.text
+
+    def test_calculate_lvr_none_volume(self, caplog):
+        """Test LVR with None volume returns None."""
+        with caplog.at_level("WARNING"):
+            result = calculate_lvr(None, 100000.0)
+        assert result is None
+        assert "Missing volume_24h" in caplog.text
+
+    def test_calculate_lvr_both_none(self, caplog):
+        """Test LVR with both values None."""
+        with caplog.at_level("WARNING"):
+            result = calculate_lvr(None, None)
+        assert result is None
+
+    def test_calculate_lvr_zero_volume(self):
+        """Test LVR with zero volume (valid, returns 0)."""
+        result = calculate_lvr(0.0, 100000.0)
+        assert result == 0.0
+
+    def test_calculate_lvr_float_precision(self):
+        """Test LVR with float precision."""
+        result = calculate_lvr(333333.33, 100000.0)
+        assert result == pytest.approx(3.3333333)
+
+
+class TestClassifyLvrHealth:
+    """Tests for classify_lvr_health function."""
+
+    def test_healthy_lvr_zero(self):
+        """Test LVR of 0 is Healthy."""
+        assert classify_lvr_health(0.0) == "Healthy"
+
+    def test_healthy_lvr_low(self):
+        """Test LVR below 2.0 is Healthy."""
+        assert classify_lvr_health(1.5) == "Healthy"
+        assert classify_lvr_health(1.99) == "Healthy"
+
+    def test_elevated_lvr_boundary(self):
+        """Test LVR at exactly 2.0 is Elevated."""
+        assert classify_lvr_health(2.0) == "Elevated"
+
+    def test_elevated_lvr_mid(self):
+        """Test LVR between 2.0 and 10.0 is Elevated."""
+        assert classify_lvr_health(5.0) == "Elevated"
+        assert classify_lvr_health(9.99) == "Elevated"
+
+    def test_high_risk_boundary(self):
+        """Test LVR at exactly 10.0 is High Risk."""
+        assert classify_lvr_health(10.0) == "High Risk"
+
+    def test_high_risk_high_values(self):
+        """Test LVR above 10.0 is High Risk."""
+        assert classify_lvr_health(15.0) == "High Risk"
+        assert classify_lvr_health(100.0) == "High Risk"
+
+
+class TestDetectLiquidityWarning:
+    """Tests for detect_liquidity_warning function."""
+
+    def test_warning_detected_high_lvr(self, market_with_lvr, spike_alert):
+        """Test liquidity warning is detected when LVR exceeds threshold."""
+        warning = detect_liquidity_warning(
+            market=market_with_lvr,
+            spike=spike_alert,
+            lvr_threshold=8.0,
+            event_name="Test Event",
+        )
+
+        assert warning is not None
+        assert warning.event_name == "Test Event"
+        assert warning.lvr == 10.0
+        assert warning.health_status == "High Risk"
+
+    def test_no_warning_low_lvr(self, market_low_lvr, spike_alert):
+        """Test no warning when LVR is below threshold."""
+        warning = detect_liquidity_warning(
+            market=market_low_lvr,
+            spike=spike_alert,
+            lvr_threshold=8.0,
+            event_name="Test Event",
+        )
+
+        assert warning is None
+
+    def test_no_warning_lvr_at_threshold(self):
+        """Test no warning when LVR equals threshold (must exceed)."""
+        market = MonitoredMarket(
+            id="m1",
+            question="Q",
+            outcome="Yes",
+            current_price=0.60,
+            previous_price=0.50,
+            is_closed=False,
+            volume_24h=800000.0,
+            liquidity=100000.0,
+            lvr=8.0,  # Exactly at threshold
+        )
+        spike = SpikeAlert(
+            event_name="",
+            market_question="Q",
+            outcome="Yes",
+            price_before=0.50,
+            price_after=0.60,
+            change_percent=20.0,
+            direction="up",
+            detected_at=datetime.now(),
+        )
+
+        warning = detect_liquidity_warning(
+            market=market,
+            spike=spike,
+            lvr_threshold=8.0,
+            event_name="Test",
+        )
+
+        assert warning is None
+
+    def test_no_warning_none_lvr(self, spike_alert):
+        """Test no warning when LVR is None."""
+        market = MonitoredMarket(
+            id="m1",
+            question="Q",
+            outcome="Yes",
+            current_price=0.60,
+            previous_price=0.50,
+            is_closed=False,
+            lvr=None,
+        )
+
+        warning = detect_liquidity_warning(
+            market=market,
+            spike=spike_alert,
+            lvr_threshold=8.0,
+            event_name="Test",
+        )
+
+        assert warning is None
+
+    def test_warning_fields_correct(self):
+        """Test all warning fields are populated correctly."""
+        market = MonitoredMarket(
+            id="m1",
+            question="Will this happen?",
+            outcome="Yes",
+            current_price=0.60,
+            previous_price=0.50,
+            is_closed=False,
+            volume_24h=1000000.0,
+            liquidity=80000.0,
+            lvr=12.5,
+        )
+        spike = SpikeAlert(
+            event_name="",
+            market_question="Will this happen?",
+            outcome="Yes",
+            price_before=0.50,
+            price_after=0.60,
+            change_percent=20.0,
+            direction="up",
+            detected_at=datetime.now(),
+        )
+
+        warning = detect_liquidity_warning(
+            market=market,
+            spike=spike,
+            lvr_threshold=8.0,
+            event_name="My Event",
+        )
+
+        assert warning.event_name == "My Event"
+        assert warning.market_question == "Will this happen?"
+        assert warning.outcome == "Yes"
+        assert warning.price_before == 0.50
+        assert warning.price_after == 0.60
+        assert warning.change_percent == 20.0
+        assert warning.direction == "up"
+        assert warning.lvr == 12.5
+        assert warning.health_status == "High Risk"
+        assert warning.volume_24h == 1000000.0
+        assert warning.liquidity == 80000.0
+        assert isinstance(warning.detected_at, datetime)
+
+    def test_warning_logging(self, market_with_lvr, spike_alert, caplog):
+        """Test that liquidity warnings are logged."""
+        with caplog.at_level("INFO"):
+            detect_liquidity_warning(
+                market=market_with_lvr,
+                spike=spike_alert,
+                lvr_threshold=8.0,
+                event_name="Test Event",
+            )
+
+        assert "Liquidity warning" in caplog.text
+        assert "LVR=" in caplog.text
+
+
+class TestDetectAllLiquidityWarnings:
+    """Tests for detect_all_liquidity_warnings function."""
+
+    def test_detect_warnings_single_spike(self):
+        """Test detecting liquidity warning for single spike."""
+        market = MonitoredMarket(
+            id="m1",
+            question="Q1",
+            outcome="Yes",
+            current_price=0.60,
+            previous_price=0.50,
+            is_closed=False,
+            volume_24h=1000000.0,
+            liquidity=80000.0,
+            lvr=12.5,
+        )
+        event = MonitoredEvent(
+            slug="e1",
+            name="Event 1",
+            markets=[market],
+        )
+        spike = SpikeAlert(
+            event_name="Event 1",
+            market_question="Q1",
+            outcome="Yes",
+            price_before=0.50,
+            price_after=0.60,
+            change_percent=20.0,
+            direction="up",
+            detected_at=datetime.now(),
+        )
+
+        warnings = detect_all_liquidity_warnings([event], [spike], lvr_threshold=8.0)
+
+        assert len(warnings) == 1
+        assert warnings[0].lvr == 12.5
+
+    def test_detect_warnings_multiple_spikes(self):
+        """Test detecting warnings for multiple spikes."""
+        market1 = MonitoredMarket(
+            id="m1", question="Q1", outcome="Yes",
+            current_price=0.60, previous_price=0.50, is_closed=False,
+            volume_24h=1000000.0, liquidity=80000.0, lvr=12.5,
+        )
+        market2 = MonitoredMarket(
+            id="m2", question="Q2", outcome="No",
+            current_price=0.30, previous_price=0.50, is_closed=False,
+            volume_24h=900000.0, liquidity=100000.0, lvr=9.0,
+        )
+        event = MonitoredEvent(
+            slug="e1", name="Event 1",
+            markets=[market1, market2],
+        )
+        spikes = [
+            SpikeAlert(
+                event_name="Event 1", market_question="Q1", outcome="Yes",
+                price_before=0.50, price_after=0.60, change_percent=20.0,
+                direction="up", detected_at=datetime.now(),
+            ),
+            SpikeAlert(
+                event_name="Event 1", market_question="Q2", outcome="No",
+                price_before=0.50, price_after=0.30, change_percent=40.0,
+                direction="down", detected_at=datetime.now(),
+            ),
+        ]
+
+        warnings = detect_all_liquidity_warnings([event], spikes, lvr_threshold=8.0)
+
+        assert len(warnings) == 2
+
+    def test_detect_warnings_no_spikes(self):
+        """Test no warnings when no spikes."""
+        market = MonitoredMarket(
+            id="m1", question="Q", outcome="Yes",
+            current_price=0.51, previous_price=0.50, is_closed=False,
+            lvr=12.5,
+        )
+        event = MonitoredEvent(slug="e1", name="Event", markets=[market])
+
+        warnings = detect_all_liquidity_warnings([event], [], lvr_threshold=8.0)
+
+        assert len(warnings) == 0
+
+    def test_detect_warnings_spikes_below_lvr_threshold(self):
+        """Test no warnings when LVR below threshold."""
+        market = MonitoredMarket(
+            id="m1", question="Q", outcome="Yes",
+            current_price=0.60, previous_price=0.50, is_closed=False,
+            volume_24h=100000.0, liquidity=100000.0, lvr=1.0,
+        )
+        event = MonitoredEvent(slug="e1", name="Event", markets=[market])
+        spike = SpikeAlert(
+            event_name="Event", market_question="Q", outcome="Yes",
+            price_before=0.50, price_after=0.60, change_percent=20.0,
+            direction="up", detected_at=datetime.now(),
+        )
+
+        warnings = detect_all_liquidity_warnings([event], [spike], lvr_threshold=8.0)
+
+        assert len(warnings) == 0
+
+    def test_detect_warnings_mixed_results(self):
+        """Test with some spikes having high LVR and some not."""
+        market_high = MonitoredMarket(
+            id="m1", question="Q1", outcome="Yes",
+            current_price=0.60, previous_price=0.50, is_closed=False,
+            lvr=12.0,
+        )
+        market_low = MonitoredMarket(
+            id="m2", question="Q2", outcome="No",
+            current_price=0.30, previous_price=0.50, is_closed=False,
+            lvr=2.0,
+        )
+        event = MonitoredEvent(
+            slug="e1", name="Event",
+            markets=[market_high, market_low],
+        )
+        spikes = [
+            SpikeAlert(
+                event_name="Event", market_question="Q1", outcome="Yes",
+                price_before=0.50, price_after=0.60, change_percent=20.0,
+                direction="up", detected_at=datetime.now(),
+            ),
+            SpikeAlert(
+                event_name="Event", market_question="Q2", outcome="No",
+                price_before=0.50, price_after=0.30, change_percent=40.0,
+                direction="down", detected_at=datetime.now(),
+            ),
+        ]
+
+        warnings = detect_all_liquidity_warnings([event], spikes, lvr_threshold=8.0)
+
+        assert len(warnings) == 1
+        assert warnings[0].market_question == "Q1"
+
+    def test_detect_warnings_logging(self, caplog):
+        """Test that warning count is logged."""
+        market = MonitoredMarket(
+            id="m1", question="Q", outcome="Yes",
+            current_price=0.60, previous_price=0.50, is_closed=False,
+            lvr=12.0,
+        )
+        event = MonitoredEvent(slug="e1", name="Event", markets=[market])
+        spike = SpikeAlert(
+            event_name="Event", market_question="Q", outcome="Yes",
+            price_before=0.50, price_after=0.60, change_percent=20.0,
+            direction="up", detected_at=datetime.now(),
+        )
+
+        with caplog.at_level("INFO"):
+            detect_all_liquidity_warnings([event], [spike], lvr_threshold=8.0)
+
+        assert "Total liquidity warnings" in caplog.text

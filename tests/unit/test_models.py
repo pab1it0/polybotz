@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime
 
-from src.models import MonitoredEvent, MonitoredMarket, SpikeAlert
+from src.models import LiquidityWarning, MonitoredEvent, MonitoredMarket, SpikeAlert
 
 
 class TestMonitoredMarket:
@@ -70,6 +70,45 @@ class TestMonitoredMarket:
         )
         assert isinstance(market.current_price, float)
         assert isinstance(market.previous_price, float)
+
+    def test_lvr_fields_default_none(self):
+        """Test LVR fields default to None."""
+        market = MonitoredMarket(
+            id="id",
+            question="Q",
+            outcome="Yes",
+        )
+        assert market.volume_24h is None
+        assert market.liquidity is None
+        assert market.lvr is None
+
+    def test_create_with_lvr_fields(self):
+        """Test creating market with LVR fields."""
+        market = MonitoredMarket(
+            id="id",
+            question="Q",
+            outcome="Yes",
+            volume_24h=1000000.0,
+            liquidity=500000.0,
+            lvr=2.0,
+        )
+        assert market.volume_24h == 1000000.0
+        assert market.liquidity == 500000.0
+        assert market.lvr == 2.0
+
+    def test_lvr_fields_types(self):
+        """Test that LVR fields can be floats."""
+        market = MonitoredMarket(
+            id="id",
+            question="Q",
+            outcome="Yes",
+            volume_24h=12345.6789,
+            liquidity=98765.4321,
+            lvr=0.125,
+        )
+        assert isinstance(market.volume_24h, float)
+        assert isinstance(market.liquidity, float)
+        assert isinstance(market.lvr, float)
 
 
 class TestMonitoredEvent:
@@ -181,3 +220,109 @@ class TestSpikeAlert:
         assert alert.detected_at == specific_time
         assert alert.detected_at.year == 2024
         assert alert.detected_at.month == 6
+
+
+class TestLiquidityWarning:
+    """Tests for LiquidityWarning dataclass."""
+
+    def test_create_liquidity_warning(self):
+        """Test creating liquidity warning with all fields."""
+        now = datetime.now()
+        warning = LiquidityWarning(
+            event_name="Event",
+            market_question="Question?",
+            outcome="Yes",
+            price_before=0.50,
+            price_after=0.60,
+            change_percent=20.0,
+            direction="up",
+            lvr=12.5,
+            health_status="High Risk",
+            volume_24h=1000000.0,
+            liquidity=80000.0,
+            detected_at=now,
+        )
+        assert warning.event_name == "Event"
+        assert warning.market_question == "Question?"
+        assert warning.outcome == "Yes"
+        assert warning.price_before == 0.50
+        assert warning.price_after == 0.60
+        assert warning.change_percent == 20.0
+        assert warning.direction == "up"
+        assert warning.lvr == 12.5
+        assert warning.health_status == "High Risk"
+        assert warning.volume_24h == 1000000.0
+        assert warning.liquidity == 80000.0
+        assert warning.detected_at == now
+
+    def test_direction_up(self, liquidity_warning):
+        """Test liquidity warning with direction up."""
+        assert liquidity_warning.direction == "up"
+        assert liquidity_warning.price_after > liquidity_warning.price_before
+
+    def test_direction_down(self, liquidity_warning_down):
+        """Test liquidity warning with direction down."""
+        assert liquidity_warning_down.direction == "down"
+        assert liquidity_warning_down.price_after < liquidity_warning_down.price_before
+
+    def test_health_status_values(self):
+        """Test different health status values."""
+        now = datetime.now()
+        base_args = {
+            "event_name": "E",
+            "market_question": "Q",
+            "outcome": "Y",
+            "price_before": 0.50,
+            "price_after": 0.60,
+            "change_percent": 20.0,
+            "direction": "up",
+            "volume_24h": 1000000.0,
+            "liquidity": 100000.0,
+            "detected_at": now,
+        }
+
+        healthy = LiquidityWarning(**base_args, lvr=1.5, health_status="Healthy")
+        assert healthy.health_status == "Healthy"
+
+        elevated = LiquidityWarning(**base_args, lvr=5.0, health_status="Elevated")
+        assert elevated.health_status == "Elevated"
+
+        high_risk = LiquidityWarning(**base_args, lvr=15.0, health_status="High Risk")
+        assert high_risk.health_status == "High Risk"
+
+    def test_lvr_value(self):
+        """Test LVR value is stored correctly."""
+        warning = LiquidityWarning(
+            event_name="E",
+            market_question="Q",
+            outcome="Y",
+            price_before=0.50,
+            price_after=0.60,
+            change_percent=20.0,
+            direction="up",
+            lvr=8.5,
+            health_status="Elevated",
+            volume_24h=850000.0,
+            liquidity=100000.0,
+            detected_at=datetime.now(),
+        )
+        assert warning.lvr == 8.5
+
+    def test_volume_and_liquidity_values(self):
+        """Test volume and liquidity values are stored correctly."""
+        warning = LiquidityWarning(
+            event_name="E",
+            market_question="Q",
+            outcome="Y",
+            price_before=0.50,
+            price_after=0.60,
+            change_percent=20.0,
+            direction="up",
+            lvr=10.0,
+            health_status="High Risk",
+            volume_24h=5000000.0,
+            liquidity=500000.0,
+            detected_at=datetime.now(),
+        )
+        assert warning.volume_24h == 5000000.0
+        assert warning.liquidity == 500000.0

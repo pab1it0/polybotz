@@ -312,3 +312,133 @@ class TestValidateConfig:
         assert "spike_threshold" in error_msg
         assert "bot_token" in error_msg
         assert "chat_id" in error_msg
+
+    def test_validate_lvr_threshold_default(self):
+        """Test default lvr_threshold value is valid."""
+        config = Configuration(
+            slugs=["slug"],
+            poll_interval=60,
+            spike_threshold=5.0,
+            telegram_bot_token="token",
+            telegram_chat_id="chatid",
+        )
+        assert config.lvr_threshold == 8.0
+        validate_config(config)
+
+    def test_validate_lvr_threshold_custom(self):
+        """Test custom lvr_threshold value is valid."""
+        config = Configuration(
+            slugs=["slug"],
+            poll_interval=60,
+            spike_threshold=5.0,
+            telegram_bot_token="token",
+            telegram_chat_id="chatid",
+            lvr_threshold=15.0,
+        )
+        validate_config(config)
+
+    def test_validate_lvr_threshold_too_small(self):
+        """Test validation fails for lvr_threshold < 0.1."""
+        config = Configuration(
+            slugs=["slug"],
+            poll_interval=60,
+            spike_threshold=5.0,
+            telegram_bot_token="token",
+            telegram_chat_id="chatid",
+            lvr_threshold=0.05,
+        )
+        with pytest.raises(ConfigurationError) as exc_info:
+            validate_config(config)
+        assert "lvr_threshold" in str(exc_info.value)
+
+    def test_validate_lvr_threshold_too_large(self):
+        """Test validation fails for lvr_threshold > 100."""
+        config = Configuration(
+            slugs=["slug"],
+            poll_interval=60,
+            spike_threshold=5.0,
+            telegram_bot_token="token",
+            telegram_chat_id="chatid",
+            lvr_threshold=150.0,
+        )
+        with pytest.raises(ConfigurationError) as exc_info:
+            validate_config(config)
+        assert "lvr_threshold" in str(exc_info.value)
+
+    def test_validate_lvr_threshold_at_bounds(self):
+        """Test lvr_threshold at valid boundaries."""
+        config_low = Configuration(
+            slugs=["slug"],
+            poll_interval=60,
+            spike_threshold=5.0,
+            telegram_bot_token="token",
+            telegram_chat_id="chatid",
+            lvr_threshold=0.1,
+        )
+        validate_config(config_low)
+
+        config_high = Configuration(
+            slugs=["slug"],
+            poll_interval=60,
+            spike_threshold=5.0,
+            telegram_bot_token="token",
+            telegram_chat_id="chatid",
+            lvr_threshold=100.0,
+        )
+        validate_config(config_high)
+
+
+class TestLoadConfigWithLvr:
+    """Tests for loading config with lvr_threshold."""
+
+    def test_load_config_default_lvr_threshold(self, tmp_path):
+        """Test config uses default lvr_threshold when not specified."""
+        config_yaml = """
+slugs:
+  - "test-slug"
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        config = load_config(config_file)
+
+        assert config.lvr_threshold == 8.0
+
+    def test_load_config_custom_lvr_threshold(self, tmp_path):
+        """Test loading config with custom lvr_threshold."""
+        config_yaml = """
+slugs:
+  - "test-slug"
+poll_interval: 60
+spike_threshold: 5.0
+lvr_threshold: 12.5
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        config = load_config(config_file)
+
+        assert config.lvr_threshold == 12.5
+
+    def test_load_config_invalid_lvr_threshold(self, tmp_path):
+        """Test loading config with invalid lvr_threshold raises error."""
+        config_yaml = """
+slugs:
+  - "test-slug"
+lvr_threshold: 200.0
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            load_config(config_file)
+        assert "lvr_threshold" in str(exc_info.value)

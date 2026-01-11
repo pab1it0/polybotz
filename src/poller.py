@@ -8,6 +8,7 @@ from datetime import datetime
 import httpx
 
 from .config import Configuration
+from .detector import calculate_lvr
 from .models import MonitoredEvent, MonitoredMarket
 
 logger = logging.getLogger("polybotz.poller")
@@ -99,6 +100,20 @@ def parse_event_response(data: dict) -> MonitoredEvent:
         outcomes = _parse_json_field(market_data.get("outcomes", []))
         prices = _parse_json_field(market_data.get("outcomePrices", []))
 
+        # Parse volume and liquidity at market level
+        volume_24h = None
+        liquidity = None
+        try:
+            if market_data.get("volume24hr") is not None:
+                volume_24h = float(market_data.get("volume24hr"))
+        except (ValueError, TypeError):
+            pass
+        try:
+            if market_data.get("liquidityNum") is not None:
+                liquidity = float(market_data.get("liquidityNum"))
+        except (ValueError, TypeError):
+            pass
+
         # Create a market entry for each outcome
         for i, outcome in enumerate(outcomes):
             price = None
@@ -115,6 +130,8 @@ def parse_event_response(data: dict) -> MonitoredEvent:
                 current_price=price,
                 previous_price=None,
                 is_closed=market_data.get("closed", False),
+                volume_24h=volume_24h,
+                liquidity=liquidity,
             )
             markets.append(market)
 
@@ -139,6 +156,14 @@ def update_prices(event: MonitoredEvent, new_data: dict) -> MonitoredEvent:
             # Update existing: current becomes previous
             new_market.previous_price = existing[key].current_price
         # else: new market, previous_price stays None
+
+        # Calculate and store LVR for each market
+        new_market.lvr = calculate_lvr(new_market.volume_24h, new_market.liquidity)
+        if new_market.lvr is not None:
+            logger.debug(
+                f"LVR calculated: {new_market.question} [{new_market.outcome}] "
+                f"LVR={new_market.lvr:.2f} (vol={new_market.volume_24h}, liq={new_market.liquidity})"
+            )
 
     event.markets = new_event.markets
     event.last_updated = new_event.last_updated

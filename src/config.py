@@ -17,6 +17,7 @@ class Configuration:
     spike_threshold: float
     telegram_bot_token: str
     telegram_chat_id: str
+    lvr_threshold: float = 8.0
 
 
 class ConfigurationError(Exception):
@@ -81,6 +82,7 @@ def load_config(config_path: str | Path) -> Configuration:
         spike_threshold=data.get("spike_threshold", 5.0),
         telegram_bot_token=telegram.get("bot_token", ""),
         telegram_chat_id=telegram.get("chat_id", ""),
+        lvr_threshold=data.get("lvr_threshold", 8.0),
     )
 
     validate_config(config)
@@ -108,6 +110,12 @@ def validate_config(config: Configuration) -> None:
         errors.append("spike_threshold: must be a number")
     elif config.spike_threshold < 0.1 or config.spike_threshold > 100.0:
         errors.append("spike_threshold: must be between 0.1 and 100.0")
+
+    # lvr_threshold: Positive float, 0.1 to 100.0
+    if not isinstance(config.lvr_threshold, (int, float)):
+        errors.append("lvr_threshold: must be a number")
+    elif config.lvr_threshold < 0.1 or config.lvr_threshold > 100.0:
+        errors.append("lvr_threshold: must be between 0.1 and 100.0")
 
     # telegram_bot_token: Non-empty string
     if not config.telegram_bot_token:

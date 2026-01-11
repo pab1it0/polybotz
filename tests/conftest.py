@@ -5,7 +5,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 from src.config import Configuration
-from src.models import MonitoredEvent, MonitoredMarket, SpikeAlert
+from src.models import LiquidityWarning, MonitoredEvent, MonitoredMarket, SpikeAlert
 
 
 @pytest.fixture
@@ -17,6 +17,7 @@ def valid_config():
         spike_threshold=5.0,
         telegram_bot_token="123456:ABC-DEF",
         telegram_chat_id="-1001234567890",
+        lvr_threshold=8.0,
     )
 
 
@@ -244,3 +245,122 @@ def mock_telegram_error_response():
         "description": "Bad Request: chat not found",
     }
     return response
+
+
+@pytest.fixture
+def market_with_lvr():
+    """Market with LVR data for liquidity warning tests."""
+    return MonitoredMarket(
+        id="condition-lvr-123",
+        question="Will this have high LVR?",
+        outcome="Yes",
+        current_price=0.60,
+        previous_price=0.50,
+        is_closed=False,
+        volume_24h=1000000.0,
+        liquidity=100000.0,
+        lvr=10.0,
+    )
+
+
+@pytest.fixture
+def market_low_lvr():
+    """Market with low LVR (healthy)."""
+    return MonitoredMarket(
+        id="condition-low-lvr",
+        question="Low LVR market?",
+        outcome="Yes",
+        current_price=0.60,
+        previous_price=0.50,
+        is_closed=False,
+        volume_24h=100000.0,
+        liquidity=100000.0,
+        lvr=1.0,
+    )
+
+
+@pytest.fixture
+def liquidity_warning():
+    """A sample LiquidityWarning."""
+    return LiquidityWarning(
+        event_name="Test Event",
+        market_question="Will this happen?",
+        outcome="Yes",
+        price_before=0.50,
+        price_after=0.60,
+        change_percent=20.0,
+        direction="up",
+        lvr=12.5,
+        health_status="High Risk",
+        volume_24h=1000000.0,
+        liquidity=80000.0,
+        detected_at=datetime(2024, 1, 15, 12, 30, 0),
+    )
+
+
+@pytest.fixture
+def liquidity_warning_down():
+    """A LiquidityWarning for price going down."""
+    return LiquidityWarning(
+        event_name="Test Event",
+        market_question="Will this happen?",
+        outcome="Yes",
+        price_before=0.80,
+        price_after=0.60,
+        change_percent=25.0,
+        direction="down",
+        lvr=9.5,
+        health_status="Elevated",
+        volume_24h=500000.0,
+        liquidity=52631.58,
+        detected_at=datetime(2024, 1, 15, 12, 30, 0),
+    )
+
+
+@pytest.fixture
+def gamma_api_response_with_lvr():
+    """Sample Gamma API response with volume and liquidity data."""
+    return {
+        "slug": "test-event-slug",
+        "title": "Test Event Title",
+        "markets": [
+            {
+                "conditionId": "cond-001",
+                "question": "Will outcome A happen?",
+                "outcomes": '["Yes", "No"]',
+                "outcomePrices": '["0.65", "0.35"]',
+                "closed": False,
+                "volume24hr": 1000000.0,
+                "liquidityNum": 500000.0,
+            },
+            {
+                "conditionId": "cond-002",
+                "question": "Will outcome B happen?",
+                "outcomes": '["Yes", "No"]',
+                "outcomePrices": '["0.80", "0.20"]',
+                "closed": False,
+                "volume24hr": 200000.0,
+                "liquidityNum": 100000.0,
+            },
+        ],
+    }
+
+
+@pytest.fixture
+def gamma_api_response_zero_liquidity():
+    """Sample Gamma API response with zero liquidity."""
+    return {
+        "slug": "zero-liq-event",
+        "title": "Zero Liquidity Event",
+        "markets": [
+            {
+                "conditionId": "cond-zero",
+                "question": "Zero liquidity market?",
+                "outcomes": '["Yes", "No"]',
+                "outcomePrices": '["0.50", "0.50"]',
+                "closed": False,
+                "volume24hr": 100000.0,
+                "liquidityNum": 0,
+            },
+        ],
+    }
