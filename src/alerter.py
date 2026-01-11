@@ -59,7 +59,7 @@ async def send_telegram_alert(
             if response.status_code == 200:
                 result = response.json()
                 if result.get("ok"):
-                    logger.info(f"Telegram alert sent successfully to chat {chat_id}")
+                    logger.info("Telegram alert sent successfully")
                     return True
                 else:
                     logger.error(f"Telegram API error: {result.get('description')}")
