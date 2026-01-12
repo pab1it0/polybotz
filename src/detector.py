@@ -1,9 +1,20 @@
 """Spike detection algorithm for Polybotz."""
 
+import json
 import logging
 from datetime import datetime
 
-from .models import LiquidityWarning, MonitoredEvent, MonitoredMarket, SpikeAlert
+from .models import (
+    ClosedEventAlert,
+    LiquidityWarning,
+    MADAlert,
+    MarketStatistics,
+    MonitoredEvent,
+    MonitoredMarket,
+    SpikeAlert,
+    ZScoreAlert,
+)
+from .statistics import calculate_zscore_mad
 
 logger = logging.getLogger("polybotz.detector")
 
@@ -198,3 +209,302 @@ def detect_all_liquidity_warnings(
         logger.info(f"Total liquidity warnings: {len(warnings)}")
 
     return warnings
+
+
+def detect_zscore_alert(
+    stats: MarketStatistics,
+    threshold: float,
+    metric: str = "volume",
+    window: str = "1h",
+) -> ZScoreAlert | None:
+    """
+    Detect if current value exceeds Z-score threshold for a given metric/window.
+
+    Args:
+        stats: MarketStatistics for a single market
+        threshold: Z-score threshold (e.g., 3.5)
+        metric: "volume" or "price"
+        window: "1h" or "4h"
+
+    Returns:
+        ZScoreAlert if threshold exceeded, None otherwise.
+    """
+    # Get the appropriate rolling window
+    window_map = {
+        ("volume", "1h"): stats.volume_1h,
+        ("volume", "4h"): stats.volume_4h,
+        ("price", "1h"): stats.price_1h,
+        ("price", "4h"): stats.price_4h,
+    }
+
+    rolling_window = window_map.get((metric, window))
+    if rolling_window is None:
+        logger.warning(f"Unknown metric/window combo: {metric}/{window}")
+        return None
+
+    # Check if we have enough observations
+    if not rolling_window.is_valid:
+        return None
+
+    values = rolling_window.values
+    if not values:
+        return None
+
+    # Current value is the most recent
+    current = values[-1]
+
+    # Calculate Z-score using all values (including current)
+    zscore = calculate_zscore_mad(current, values)
+    if zscore is None:
+        return None
+
+    # Check threshold
+    if abs(zscore) <= threshold:
+        return None
+
+    median = rolling_window.median
+    mad = rolling_window.mad
+
+    logger.info(
+        f"Z-score alert: {stats.market_id} {metric}/{window} "
+        f"zscore={zscore:.2f} (threshold={threshold})"
+    )
+
+    return ZScoreAlert(
+        market_id=stats.market_id,
+        metric=metric,
+        window=window,
+        current_value=current,
+        median=median,
+        mad=mad,
+        zscore=zscore,
+        threshold=threshold,
+        detected_at=datetime.now(),
+    )
+
+
+def detect_mad_alert(
+    stats: MarketStatistics,
+    multiplier: float,
+    metric: str = "price",
+    window: str = "1h",
+) -> MADAlert | None:
+    """
+    Detect if current value exceeds MAD multiplier threshold.
+
+    Alert triggers when: |current - median| > multiplier × MAD
+
+    Args:
+        stats: MarketStatistics for a single market
+        multiplier: MAD multiplier threshold (e.g., 3.0)
+        metric: "volume" or "price"
+        window: "1h" or "4h"
+
+    Returns:
+        MADAlert if threshold exceeded, None otherwise.
+    """
+    # Get the appropriate rolling window
+    window_map = {
+        ("volume", "1h"): stats.volume_1h,
+        ("volume", "4h"): stats.volume_4h,
+        ("price", "1h"): stats.price_1h,
+        ("price", "4h"): stats.price_4h,
+    }
+
+    rolling_window = window_map.get((metric, window))
+    if rolling_window is None:
+        logger.warning(f"Unknown metric/window combo: {metric}/{window}")
+        return None
+
+    # Check if we have enough observations
+    if not rolling_window.is_valid:
+        return None
+
+    values = rolling_window.values
+    if not values:
+        return None
+
+    # Current value is the most recent
+    current = values[-1]
+    median = rolling_window.median
+    mad = rolling_window.mad
+
+    if median is None or mad is None or mad == 0:
+        return None
+
+    # Calculate how many MADs away from median
+    deviation = abs(current - median)
+    actual_multiplier = deviation / mad
+
+    # Check threshold
+    if actual_multiplier <= multiplier:
+        return None
+
+    logger.info(
+        f"MAD alert: {stats.market_id} {metric}/{window} "
+        f"multiplier={actual_multiplier:.2f} (threshold={multiplier})"
+    )
+
+    return MADAlert(
+        market_id=stats.market_id,
+        metric=metric,
+        window=window,
+        current_value=current,
+        median=median,
+        mad=mad,
+        multiplier=actual_multiplier,
+        threshold_multiplier=multiplier,
+        detected_at=datetime.now(),
+    )
+
+
+def detect_all_zscore_alerts(
+    stats_dict: dict[str, MarketStatistics],
+    threshold: float = 3.5,
+) -> list[ZScoreAlert]:
+    """
+    Detect Z-score alerts across all monitored markets.
+
+    Checks volume on 1h and 4h windows.
+
+    Args:
+        stats_dict: Dict mapping market_id to MarketStatistics
+        threshold: Z-score threshold (default 3.5)
+
+    Returns:
+        List of ZScoreAlert objects for all triggered alerts.
+    """
+    alerts = []
+
+    for market_id, stats in stats_dict.items():
+        # Check volume on both windows
+        for window in ("1h", "4h"):
+            alert = detect_zscore_alert(stats, threshold, metric="volume", window=window)
+            if alert:
+                alerts.append(alert)
+
+    if alerts:
+        logger.info(f"Total Z-score alerts: {len(alerts)}")
+
+    return alerts
+
+
+def detect_all_mad_alerts(
+    stats_dict: dict[str, MarketStatistics],
+    multiplier: float = 3.0,
+) -> list[MADAlert]:
+    """
+    Detect MAD alerts across all monitored markets.
+
+    Checks price on 1h and 4h windows.
+
+    Args:
+        stats_dict: Dict mapping market_id to MarketStatistics
+        multiplier: MAD multiplier threshold (default 3.0)
+
+    Returns:
+        List of MADAlert objects for all triggered alerts.
+    """
+    alerts = []
+
+    for market_id, stats in stats_dict.items():
+        # Check price on both windows
+        for window in ("1h", "4h"):
+            alert = detect_mad_alert(stats, multiplier, metric="price", window=window)
+            if alert:
+                alerts.append(alert)
+
+    if alerts:
+        logger.info(f"Total MAD alerts: {len(alerts)}")
+
+    return alerts
+
+
+def detect_closed_markets(
+    events: dict[str, MonitoredEvent],
+    new_data: dict[str, dict],
+) -> tuple[list[ClosedEventAlert], list[str]]:
+    """
+    Detect markets that transitioned from open to closed.
+
+    Compares the new API data against existing event state to find
+    markets that just closed. Returns alerts for each transition
+    and a list of event slugs to remove (when all markets are closed).
+
+    Args:
+        events: Dict mapping slug to existing MonitoredEvent state
+        new_data: Dict mapping slug to raw API response data
+
+    Returns:
+        Tuple of (list of ClosedEventAlert, list of slugs to remove)
+    """
+    alerts = []
+    slugs_to_remove = []
+
+    for slug, event in events.items():
+        if slug not in new_data:
+            continue
+
+        api_event = new_data[slug]
+        api_markets = api_event.get("markets", [])
+
+        # Build lookup of API market data by question
+        api_market_lookup = {}
+        for api_market in api_markets:
+            question = api_market.get("question", "")
+            api_market_lookup[question] = api_market
+
+        all_closed = True
+        for market in event.markets:
+            api_market = api_market_lookup.get(market.question)
+            if api_market is None:
+                continue
+
+            new_closed = api_market.get("closed", False)
+
+            # Check for transition: was open, now closed
+            if new_closed and not market.is_closed:
+                # Get final price from API
+                final_price = None
+                outcome_prices = api_market.get("outcomePrices")
+                if outcome_prices:
+                    try:
+                        # outcomePrices is typically a JSON string like '["0.95", "0.05"]'
+                        if isinstance(outcome_prices, str):
+                            prices = json.loads(outcome_prices)
+                        else:
+                            prices = outcome_prices
+                        # Match outcome to price (Yes=0, No=1)
+                        idx = 0 if market.outcome.lower() == "yes" else 1
+                        if idx < len(prices):
+                            final_price = float(prices[idx])
+                    except (json.JSONDecodeError, ValueError, IndexError):
+                        final_price = market.current_price
+
+                alert = ClosedEventAlert(
+                    event_name=event.name,
+                    event_slug=slug,
+                    market_question=market.question,
+                    outcome=market.outcome,
+                    final_price=final_price,
+                    detected_at=datetime.now(),
+                )
+                alerts.append(alert)
+                logger.info(
+                    f"Market closed: {market.question} [{market.outcome}] "
+                    f"final_price={final_price}"
+                )
+
+            # Track if any market is still open
+            if not new_closed:
+                all_closed = False
+
+        # If all markets are closed, mark event for removal
+        if all_closed and event.markets:
+            slugs_to_remove.append(slug)
+            logger.info(f"All markets closed for event: {event.name}")
+
+    if alerts:
+        logger.info(f"Total closed market alerts: {len(alerts)}")
+
+    return alerts, slugs_to_remove

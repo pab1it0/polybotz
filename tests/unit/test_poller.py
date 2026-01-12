@@ -381,6 +381,52 @@ class TestParseEventResponse:
 
         assert result.markets[0].current_price is None
 
+    def test_parse_clob_token_ids(self, gamma_api_response):
+        """Test that clobTokenIds are parsed correctly."""
+        result = parse_event_response(gamma_api_response)
+
+        # First market Yes outcome should have token-001-yes
+        yes_market_a = next(
+            m for m in result.markets
+            if m.outcome == "Yes" and m.question == "Will outcome A happen?"
+        )
+        assert yes_market_a.clob_token_id == "token-001-yes"
+
+        # First market No outcome should have token-001-no
+        no_market_a = next(
+            m for m in result.markets
+            if m.outcome == "No" and m.question == "Will outcome A happen?"
+        )
+        assert no_market_a.clob_token_id == "token-001-no"
+
+    def test_parse_clob_token_ids_list_format(self, gamma_api_response_list_format):
+        """Test clobTokenIds parsing with list format (not JSON string)."""
+        result = parse_event_response(gamma_api_response_list_format)
+
+        yes_market = next(m for m in result.markets if m.outcome == "Yes")
+        assert yes_market.clob_token_id == "token-003-yes"
+
+    def test_parse_missing_clob_token_ids(self):
+        """Test handling missing clobTokenIds field."""
+        data = {
+            "slug": "test",
+            "title": "Test",
+            "markets": [
+                {
+                    "conditionId": "c1",
+                    "question": "Q",
+                    "outcomes": '["Yes", "No"]',
+                    "outcomePrices": '["0.6", "0.4"]',
+                    "closed": False,
+                    # No clobTokenIds field
+                }
+            ],
+        }
+        result = parse_event_response(data)
+
+        assert result.markets[0].clob_token_id is None
+        assert result.markets[1].clob_token_id is None
+
 
 class TestUpdatePrices:
     """Tests for update_prices function."""

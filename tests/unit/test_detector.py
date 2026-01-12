@@ -1,17 +1,31 @@
 """Tests for src/detector.py."""
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from src.models import LiquidityWarning, MonitoredEvent, MonitoredMarket, SpikeAlert
+from src.models import (
+    ClosedEventAlert,
+    LiquidityWarning,
+    MarketStatistics,
+    MonitoredEvent,
+    MonitoredMarket,
+    SpikeAlert,
+    ZScoreAlert,
+    MADAlert,
+)
 from src.detector import (
     calculate_lvr,
     classify_lvr_health,
     detect_all_liquidity_warnings,
     detect_all_spikes,
+    detect_closed_markets,
     detect_liquidity_warning,
     detect_spike,
+    detect_zscore_alert,
+    detect_mad_alert,
+    detect_all_zscore_alerts,
+    detect_all_mad_alerts,
 )
 
 
@@ -709,3 +723,520 @@ class TestDetectAllLiquidityWarnings:
             detect_all_liquidity_warnings([event], [spike], lvr_threshold=8.0)
 
         assert "Total liquidity warnings" in caplog.text
+
+
+class TestDetectZScoreAlert:
+    """Tests for detect_zscore_alert function (T028)."""
+
+    def test_detect_zscore_alert_triggers(self):
+        """Test Z-score alert triggers when threshold exceeded."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add enough observations to make window valid (min 30)
+        for i in range(35):
+            stats.volume_1h.add(100.0 + i * 0.1, now)
+
+        # Add a spike value
+        stats.volume_1h.add(500.0, now)
+
+        alert = detect_zscore_alert(stats, threshold=3.5, metric="volume", window="1h")
+
+        assert alert is not None
+        assert alert.market_id == "test-market"
+        assert alert.metric == "volume"
+        assert alert.window == "1h"
+        assert alert.zscore > 3.5
+
+    def test_no_alert_below_threshold(self):
+        """Test no alert when Z-score is below threshold (T030)."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add observations that are all similar (low variance)
+        for i in range(35):
+            stats.volume_1h.add(100.0 + i * 0.1, now)
+
+        # Add a value only slightly higher (low z-score)
+        stats.volume_1h.add(105.0, now)
+
+        alert = detect_zscore_alert(stats, threshold=3.5, metric="volume", window="1h")
+
+        assert alert is None
+
+    def test_no_alert_insufficient_data(self):
+        """Test no alert when insufficient observations (T031)."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add fewer than min_observations (30)
+        for i in range(10):
+            stats.volume_1h.add(100.0, now)
+
+        # Even a spike should not trigger without enough data
+        stats.volume_1h.add(1000.0, now)
+
+        alert = detect_zscore_alert(stats, threshold=3.5, metric="volume", window="1h")
+
+        assert alert is None
+
+
+class TestDetectMADAlert:
+    """Tests for detect_mad_alert function (T029)."""
+
+    def test_detect_mad_alert_triggers(self):
+        """Test MAD alert triggers when value exceeds multiplier."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add observations: values around 100 with MAD ~= 1
+        for i in range(35):
+            stats.price_1h.add(100.0 + (i % 5) - 2, now)  # Values 98-102
+
+        # Add a spike value far from median
+        stats.price_1h.add(120.0, now)  # ~20 above median
+
+        alert = detect_mad_alert(stats, multiplier=3.0, metric="price", window="1h")
+
+        assert alert is not None
+        assert alert.market_id == "test-market"
+        assert alert.metric == "price"
+        assert alert.window == "1h"
+        assert alert.multiplier > 3.0
+
+    def test_no_mad_alert_below_multiplier(self):
+        """Test no MAD alert when value is within normal range."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add observations with consistent values
+        for i in range(35):
+            stats.price_1h.add(100.0 + (i % 5) - 2, now)
+
+        # Add a value only slightly higher
+        stats.price_1h.add(103.0, now)
+
+        alert = detect_mad_alert(stats, multiplier=3.0, metric="price", window="1h")
+
+        assert alert is None
+
+    def test_no_mad_alert_insufficient_data(self):
+        """Test no MAD alert when insufficient observations."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add fewer than min_observations
+        for i in range(10):
+            stats.price_1h.add(100.0, now)
+
+        stats.price_1h.add(200.0, now)
+
+        alert = detect_mad_alert(stats, multiplier=3.0, metric="price", window="1h")
+
+        assert alert is None
+
+
+class TestDetectAllZScoreAlerts:
+    """Tests for detect_all_zscore_alerts function (T034)."""
+
+    def test_detect_all_zscore_alerts_multiple_markets(self):
+        """Test detecting Z-score alerts across multiple markets."""
+        now = datetime.now()
+
+        stats1 = MarketStatistics(market_id="market1")
+        stats2 = MarketStatistics(market_id="market2")
+
+        # Populate both with valid data (with some variance to get non-zero MAD)
+        for i in range(35):
+            stats1.volume_1h.add(100.0 + (i % 5), now)  # Values 100-104
+            stats2.volume_1h.add(100.0 + (i % 5), now)  # Values 100-104
+
+        # Add spike to market1 only
+        stats1.volume_1h.add(500.0, now)
+        stats2.volume_1h.add(101.0, now)
+
+        stats_dict = {"market1": stats1, "market2": stats2}
+
+        alerts = detect_all_zscore_alerts(stats_dict, threshold=3.5)
+
+        # Only market1 should have an alert
+        market_ids = [a.market_id for a in alerts]
+        assert "market1" in market_ids
+
+
+class TestDetectAllMADAlerts:
+    """Tests for detect_all_mad_alerts function (T035)."""
+
+    def test_detect_all_mad_alerts_multiple_markets(self):
+        """Test detecting MAD alerts across multiple markets."""
+        now = datetime.now()
+
+        stats1 = MarketStatistics(market_id="market1")
+        stats2 = MarketStatistics(market_id="market2")
+
+        # Populate both with valid data
+        for i in range(35):
+            stats1.price_1h.add(100.0 + (i % 3), now)
+            stats2.price_1h.add(100.0 + (i % 3), now)
+
+        # Add spike to market1 only
+        stats1.price_1h.add(200.0, now)
+        stats2.price_1h.add(101.0, now)
+
+        stats_dict = {"market1": stats1, "market2": stats2}
+
+        alerts = detect_all_mad_alerts(stats_dict, multiplier=3.0)
+
+        # Only market1 should have an alert
+        market_ids = [a.market_id for a in alerts]
+        assert "market1" in market_ids
+
+
+class TestDetectClosedMarkets:
+    """Tests for detect_closed_markets function."""
+
+    def test_detect_single_market_transition(self):
+        """Test detecting when a single market transitions from open to closed."""
+        # Existing event with open market
+        market = MonitoredMarket(
+            id="m1",
+            question="Will this happen?",
+            outcome="Yes",
+            current_price=0.50,
+            previous_price=None,
+            is_closed=False,
+        )
+        event = MonitoredEvent(
+            slug="test-slug",
+            name="Test Event",
+            markets=[market],
+        )
+        events = {"test-slug": event}
+
+        # New API data shows market is now closed
+        new_data = {
+            "test-slug": {
+                "title": "Test Event",
+                "markets": [
+                    {
+                        "question": "Will this happen?",
+                        "closed": True,
+                        "outcomePrices": '["0.95", "0.05"]',
+                    },
+                ],
+            },
+        }
+
+        alerts, slugs_to_remove = detect_closed_markets(events, new_data)
+
+        assert len(alerts) == 1
+        assert alerts[0].event_name == "Test Event"
+        assert alerts[0].market_question == "Will this happen?"
+        assert alerts[0].outcome == "Yes"
+        assert alerts[0].final_price == 0.95
+        assert "test-slug" in slugs_to_remove
+
+    def test_no_alert_for_already_closed_market(self):
+        """Test no alert when market was already closed."""
+        market = MonitoredMarket(
+            id="m1",
+            question="Already closed?",
+            outcome="Yes",
+            current_price=0.95,
+            previous_price=0.90,
+            is_closed=True,  # Already closed
+        )
+        event = MonitoredEvent(
+            slug="test-slug",
+            name="Test Event",
+            markets=[market],
+        )
+        events = {"test-slug": event}
+
+        new_data = {
+            "test-slug": {
+                "title": "Test Event",
+                "markets": [
+                    {
+                        "question": "Already closed?",
+                        "closed": True,
+                        "outcomePrices": '["0.95", "0.05"]',
+                    },
+                ],
+            },
+        }
+
+        alerts, slugs_to_remove = detect_closed_markets(events, new_data)
+
+        assert len(alerts) == 0
+        # Event should still be in removal list since all markets are closed
+        assert "test-slug" in slugs_to_remove
+
+    def test_no_alert_for_still_open_market(self):
+        """Test no alert when market is still open."""
+        market = MonitoredMarket(
+            id="m1",
+            question="Still open?",
+            outcome="Yes",
+            current_price=0.50,
+            previous_price=None,
+            is_closed=False,
+        )
+        event = MonitoredEvent(
+            slug="test-slug",
+            name="Test Event",
+            markets=[market],
+        )
+        events = {"test-slug": event}
+
+        new_data = {
+            "test-slug": {
+                "title": "Test Event",
+                "markets": [
+                    {
+                        "question": "Still open?",
+                        "closed": False,
+                        "outcomePrices": '["0.50", "0.50"]',
+                    },
+                ],
+            },
+        }
+
+        alerts, slugs_to_remove = detect_closed_markets(events, new_data)
+
+        assert len(alerts) == 0
+        assert len(slugs_to_remove) == 0
+
+    def test_mixed_transitions(self):
+        """Test when some markets close and some stay open."""
+        market1 = MonitoredMarket(
+            id="m1",
+            question="Q1",
+            outcome="Yes",
+            current_price=0.50,
+            previous_price=None,
+            is_closed=False,
+        )
+        market2 = MonitoredMarket(
+            id="m2",
+            question="Q2",
+            outcome="Yes",
+            current_price=0.60,
+            previous_price=None,
+            is_closed=False,
+        )
+        event = MonitoredEvent(
+            slug="test-slug",
+            name="Test Event",
+            markets=[market1, market2],
+        )
+        events = {"test-slug": event}
+
+        # Q1 closes, Q2 stays open
+        new_data = {
+            "test-slug": {
+                "title": "Test Event",
+                "markets": [
+                    {
+                        "question": "Q1",
+                        "closed": True,
+                        "outcomePrices": '["0.90", "0.10"]',
+                    },
+                    {
+                        "question": "Q2",
+                        "closed": False,
+                        "outcomePrices": '["0.60", "0.40"]',
+                    },
+                ],
+            },
+        }
+
+        alerts, slugs_to_remove = detect_closed_markets(events, new_data)
+
+        # Should have 1 alert for Q1
+        assert len(alerts) == 1
+        assert alerts[0].market_question == "Q1"
+
+        # Event should NOT be removed (Q2 is still open)
+        assert len(slugs_to_remove) == 0
+
+    def test_event_removed_when_all_markets_closed(self):
+        """Test event is marked for removal when all markets close."""
+        market1 = MonitoredMarket(
+            id="m1",
+            question="Q1",
+            outcome="Yes",
+            current_price=0.50,
+            previous_price=None,
+            is_closed=False,
+        )
+        market2 = MonitoredMarket(
+            id="m2",
+            question="Q2",
+            outcome="Yes",
+            current_price=0.60,
+            previous_price=None,
+            is_closed=False,
+        )
+        event = MonitoredEvent(
+            slug="test-slug",
+            name="Test Event",
+            markets=[market1, market2],
+        )
+        events = {"test-slug": event}
+
+        # Both markets close
+        new_data = {
+            "test-slug": {
+                "title": "Test Event",
+                "markets": [
+                    {
+                        "question": "Q1",
+                        "closed": True,
+                        "outcomePrices": '["0.90", "0.10"]',
+                    },
+                    {
+                        "question": "Q2",
+                        "closed": True,
+                        "outcomePrices": '["1.00", "0.00"]',
+                    },
+                ],
+            },
+        }
+
+        alerts, slugs_to_remove = detect_closed_markets(events, new_data)
+
+        assert len(alerts) == 2
+        assert "test-slug" in slugs_to_remove
+
+    def test_no_event_not_in_new_data(self):
+        """Test handling when event is not in new API data."""
+        market = MonitoredMarket(
+            id="m1",
+            question="Q",
+            outcome="Yes",
+            current_price=0.50,
+            previous_price=None,
+            is_closed=False,
+        )
+        event = MonitoredEvent(
+            slug="test-slug",
+            name="Test Event",
+            markets=[market],
+        )
+        events = {"test-slug": event}
+
+        # Empty new data
+        new_data = {}
+
+        alerts, slugs_to_remove = detect_closed_markets(events, new_data)
+
+        assert len(alerts) == 0
+        assert len(slugs_to_remove) == 0
+
+    def test_outcome_no_final_price(self):
+        """Test final price for No outcome."""
+        market = MonitoredMarket(
+            id="m1",
+            question="Q",
+            outcome="No",
+            current_price=0.50,
+            previous_price=None,
+            is_closed=False,
+        )
+        event = MonitoredEvent(
+            slug="test-slug",
+            name="Test Event",
+            markets=[market],
+        )
+        events = {"test-slug": event}
+
+        new_data = {
+            "test-slug": {
+                "title": "Test Event",
+                "markets": [
+                    {
+                        "question": "Q",
+                        "closed": True,
+                        "outcomePrices": '["0.90", "0.10"]',
+                    },
+                ],
+            },
+        }
+
+        alerts, slugs_to_remove = detect_closed_markets(events, new_data)
+
+        assert len(alerts) == 1
+        assert alerts[0].outcome == "No"
+        assert alerts[0].final_price == 0.10  # No outcome gets index 1
+
+    def test_final_price_with_list_format(self):
+        """Test final price when outcomePrices is already a list."""
+        market = MonitoredMarket(
+            id="m1",
+            question="Q",
+            outcome="Yes",
+            current_price=0.50,
+            previous_price=None,
+            is_closed=False,
+        )
+        event = MonitoredEvent(
+            slug="test-slug",
+            name="Test Event",
+            markets=[market],
+        )
+        events = {"test-slug": event}
+
+        new_data = {
+            "test-slug": {
+                "title": "Test Event",
+                "markets": [
+                    {
+                        "question": "Q",
+                        "closed": True,
+                        "outcomePrices": ["0.95", "0.05"],  # Already a list
+                    },
+                ],
+            },
+        }
+
+        alerts, slugs_to_remove = detect_closed_markets(events, new_data)
+
+        assert len(alerts) == 1
+        assert alerts[0].final_price == 0.95
+
+    def test_logging_on_closed_market(self, caplog):
+        """Test that closed market transitions are logged."""
+        market = MonitoredMarket(
+            id="m1",
+            question="Q",
+            outcome="Yes",
+            current_price=0.50,
+            previous_price=None,
+            is_closed=False,
+        )
+        event = MonitoredEvent(
+            slug="test-slug",
+            name="Test Event",
+            markets=[market],
+        )
+        events = {"test-slug": event}
+
+        new_data = {
+            "test-slug": {
+                "title": "Test Event",
+                "markets": [
+                    {
+                        "question": "Q",
+                        "closed": True,
+                        "outcomePrices": '["0.95", "0.05"]',
+                    },
+                ],
+            },
+        }
+
+        with caplog.at_level("INFO"):
+            detect_closed_markets(events, new_data)
+
+        assert "Market closed" in caplog.text
+        assert "All markets closed for event" in caplog.text

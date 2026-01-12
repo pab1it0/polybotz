@@ -99,6 +99,7 @@ def parse_event_response(data: dict) -> MonitoredEvent:
         # Handle outcomes and prices that may be JSON strings
         outcomes = _parse_json_field(market_data.get("outcomes", []))
         prices = _parse_json_field(market_data.get("outcomePrices", []))
+        clob_token_ids = _parse_json_field(market_data.get("clobTokenIds", []))
 
         # Parse volume and liquidity at market level
         volume_24h = None
@@ -123,6 +124,11 @@ def parse_event_response(data: dict) -> MonitoredEvent:
                 except (ValueError, TypeError):
                     price = None
 
+            # Get CLOB token ID for this outcome (if available)
+            clob_token_id = None
+            if i < len(clob_token_ids):
+                clob_token_id = str(clob_token_ids[i]) if clob_token_ids[i] else None
+
             market = MonitoredMarket(
                 id=market_data.get("conditionId", market_data.get("id", "")),
                 question=market_data.get("question", ""),
@@ -132,6 +138,7 @@ def parse_event_response(data: dict) -> MonitoredEvent:
                 is_closed=market_data.get("closed", False),
                 volume_24h=volume_24h,
                 liquidity=liquidity,
+                clob_token_id=clob_token_id,
             )
             markets.append(market)
 
@@ -188,3 +195,32 @@ async def poll_all_events(
         events[slug] = update_prices(event, data)
 
     return events
+
+
+async def fetch_all_events_raw(
+    client: httpx.AsyncClient,
+    slugs: list[str],
+) -> dict[str, dict]:
+    """
+    Fetch raw API data for all events without updating state.
+
+    Used for detecting state transitions (e.g., closed markets)
+    before updating the main event state.
+
+    Args:
+        client: HTTP client for API requests
+        slugs: List of event slugs to fetch
+
+    Returns:
+        Dict mapping slug to raw API response data
+    """
+    raw_data = {}
+
+    for slug in slugs:
+        logger.debug(f"Fetching raw data for: {slug}")
+        data = await fetch_event_by_slug(client, slug)
+
+        if data is not None:
+            raw_data[slug] = data
+
+    return raw_data

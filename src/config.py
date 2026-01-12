@@ -18,6 +18,14 @@ class Configuration:
     telegram_bot_token: str
     telegram_chat_id: str
     lvr_threshold: float = 8.0
+    # CLOB/Z-score configuration
+    clob_token_ids: list[str] = None  # type: ignore
+    zscore_threshold: float = 3.5
+    mad_multiplier: float = 3.0
+
+    def __post_init__(self):
+        if self.clob_token_ids is None:
+            self.clob_token_ids = []
 
 
 class ConfigurationError(Exception):
@@ -66,11 +74,17 @@ def load_config_from_env() -> Configuration:
         POLYBOTZ_POLL_INTERVAL: Seconds between polls (default: 60)
         POLYBOTZ_SPIKE_THRESHOLD: Percentage for spike alerts (default: 5.0)
         POLYBOTZ_LVR_THRESHOLD: LVR threshold for warnings (default: 8.0)
+        POLYBOTZ_CLOB_TOKEN_IDS: Comma-separated list of CLOB token IDs (optional)
+        POLYBOTZ_ZSCORE_THRESHOLD: Z-score threshold for alerts (default: 3.5)
+        POLYBOTZ_MAD_MULTIPLIER: MAD multiplier threshold (default: 3.0)
         TELEGRAM_BOT_TOKEN: Telegram bot API token (required)
         TELEGRAM_CHAT_ID: Telegram chat ID (required)
     """
     slugs_str = os.environ.get("POLYBOTZ_SLUGS", "")
     slugs = [s.strip() for s in slugs_str.split(",") if s.strip()]
+
+    clob_token_ids_str = os.environ.get("POLYBOTZ_CLOB_TOKEN_IDS", "")
+    clob_token_ids = [s.strip() for s in clob_token_ids_str.split(",") if s.strip()]
 
     try:
         poll_interval = int(os.environ.get("POLYBOTZ_POLL_INTERVAL", "60"))
@@ -87,6 +101,16 @@ def load_config_from_env() -> Configuration:
     except ValueError:
         lvr_threshold = 8.0
 
+    try:
+        zscore_threshold = float(os.environ.get("POLYBOTZ_ZSCORE_THRESHOLD", "3.5"))
+    except ValueError:
+        zscore_threshold = 3.5
+
+    try:
+        mad_multiplier = float(os.environ.get("POLYBOTZ_MAD_MULTIPLIER", "3.0"))
+    except ValueError:
+        mad_multiplier = 3.0
+
     config = Configuration(
         slugs=slugs,
         poll_interval=poll_interval,
@@ -94,6 +118,9 @@ def load_config_from_env() -> Configuration:
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
         lvr_threshold=lvr_threshold,
+        clob_token_ids=clob_token_ids,
+        zscore_threshold=zscore_threshold,
+        mad_multiplier=mad_multiplier,
     )
 
     validate_config(config)
@@ -132,6 +159,9 @@ def load_config(config_path: str | Path | None = None) -> Configuration:
             telegram_bot_token=telegram.get("bot_token", ""),
             telegram_chat_id=telegram.get("chat_id", ""),
             lvr_threshold=data.get("lvr_threshold", 8.0),
+            clob_token_ids=data.get("clob_token_ids", []),
+            zscore_threshold=data.get("zscore_threshold", 3.5),
+            mad_multiplier=data.get("mad_multiplier", 3.0),
         )
 
         validate_config(config)
