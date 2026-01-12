@@ -6,6 +6,7 @@ from datetime import datetime
 
 from .models import (
     ClosedEventAlert,
+    CooldownEntry,
     LiquidityWarning,
     MADAlert,
     MarketStatistics,
@@ -17,6 +18,105 @@ from .models import (
 from .statistics import calculate_zscore_mad
 
 logger = logging.getLogger("polybotz.detector")
+
+
+class CooldownManager:
+    """Manages alert cooldown state for (market_id, metric, window) tuples."""
+
+    def __init__(self, cooldown_minutes: int = 30, escalation_threshold: float = 1.0):
+        """
+        Initialize cooldown manager.
+
+        Args:
+            cooldown_minutes: Minutes to suppress re-alerts (0 = disabled)
+            escalation_threshold: Z-score increase required to re-alert during cooldown
+        """
+        self.entries: dict[str, CooldownEntry] = {}
+        self.cooldown_minutes = cooldown_minutes
+        self.escalation_threshold = escalation_threshold
+
+    def _make_key(self, market_id: str, metric: str, window: str) -> str:
+        """Create a unique key for the (market_id, metric, window) tuple."""
+        return f"{market_id}:{metric}:{window}"
+
+    def should_alert(self, key: str, current_zscore: float) -> bool:
+        """
+        Determine if an alert should fire based on cooldown state.
+
+        Args:
+            key: Cooldown key (market_id:metric:window)
+            current_zscore: Current z-score value
+
+        Returns:
+            True if alert should fire, False if suppressed
+        """
+        # Cooldown disabled - always alert
+        if self.cooldown_minutes == 0:
+            return True
+
+        # No previous entry - first alert, always fire
+        if key not in self.entries:
+            return True
+
+        entry = self.entries[key]
+        now = datetime.now()
+        elapsed = (now - entry.last_alert_time).total_seconds() / 60
+
+        # Cooldown expired - alert
+        if elapsed >= self.cooldown_minutes:
+            return True
+
+        # Check for escalation (significant increase in z-score)
+        zscore_increase = current_zscore - entry.last_zscore
+        if zscore_increase >= self.escalation_threshold:
+            return True
+
+        # Still in cooldown, not escalating - suppress
+        return False
+
+    def record_alert(self, key: str, zscore: float) -> None:
+        """
+        Record that an alert was sent for this key.
+
+        Args:
+            key: Cooldown key (market_id:metric:window)
+            zscore: Z-score value at time of alert
+        """
+        self.entries[key] = CooldownEntry(
+            key=key,
+            last_alert_time=datetime.now(),
+            last_zscore=zscore,
+        )
+
+    def clear_entry(self, key: str) -> None:
+        """
+        Clear cooldown entry when anomaly resolves.
+
+        Args:
+            key: Cooldown key to remove
+        """
+        if key in self.entries:
+            del self.entries[key]
+
+    def cleanup_stale(self) -> None:
+        """Remove cooldown entries older than 2x cooldown_minutes."""
+        if self.cooldown_minutes == 0:
+            return
+
+        now = datetime.now()
+        stale_threshold = self.cooldown_minutes * 2
+        stale_keys = []
+
+        for key, entry in self.entries.items():
+            elapsed = (now - entry.last_alert_time).total_seconds() / 60
+            if elapsed > stale_threshold:
+                stale_keys.append(key)
+
+        for key in stale_keys:
+            del self.entries[key]
+
+        if stale_keys:
+            logger.debug(f"Cleaned up {len(stale_keys)} stale cooldown entries")
 
 
 def calculate_lvr(volume_24h: float | None, liquidity: float | None) -> float | None:
@@ -361,6 +461,8 @@ def detect_mad_alert(
 def detect_all_zscore_alerts(
     stats_dict: dict[str, MarketStatistics],
     threshold: float = 3.5,
+    cooldown_manager: CooldownManager | None = None,
+    token_mapping: dict[str, tuple[str, str]] | None = None,
 ) -> list[ZScoreAlert]:
     """
     Detect Z-score alerts across all monitored markets.
@@ -370,6 +472,8 @@ def detect_all_zscore_alerts(
     Args:
         stats_dict: Dict mapping market_id to MarketStatistics
         threshold: Z-score threshold (default 3.5)
+        cooldown_manager: Optional CooldownManager for suppressing repeated alerts
+        token_mapping: Optional dict mapping token_id to (event_name, outcome)
 
     Returns:
         List of ZScoreAlert objects for all triggered alerts.
@@ -381,6 +485,19 @@ def detect_all_zscore_alerts(
         for window in ("1h", "4h"):
             alert = detect_zscore_alert(stats, threshold, metric="volume", window=window)
             if alert:
+                # Apply cooldown check
+                if cooldown_manager:
+                    key = cooldown_manager._make_key(market_id, "volume", window)
+                    if not cooldown_manager.should_alert(key, alert.zscore):
+                        continue  # Suppressed by cooldown
+                    cooldown_manager.record_alert(key, alert.zscore)
+
+                # Add human-readable event info if available
+                if token_mapping and market_id in token_mapping:
+                    event_name, outcome = token_mapping[market_id]
+                    alert.event_name = event_name
+                    alert.outcome = outcome
+
                 alerts.append(alert)
 
     if alerts:
@@ -392,6 +509,8 @@ def detect_all_zscore_alerts(
 def detect_all_mad_alerts(
     stats_dict: dict[str, MarketStatistics],
     multiplier: float = 3.0,
+    cooldown_manager: CooldownManager | None = None,
+    token_mapping: dict[str, tuple[str, str]] | None = None,
 ) -> list[MADAlert]:
     """
     Detect MAD alerts across all monitored markets.
@@ -401,6 +520,8 @@ def detect_all_mad_alerts(
     Args:
         stats_dict: Dict mapping market_id to MarketStatistics
         multiplier: MAD multiplier threshold (default 3.0)
+        cooldown_manager: Optional CooldownManager for suppressing repeated alerts
+        token_mapping: Optional dict mapping token_id to (event_name, outcome)
 
     Returns:
         List of MADAlert objects for all triggered alerts.
@@ -412,6 +533,19 @@ def detect_all_mad_alerts(
         for window in ("1h", "4h"):
             alert = detect_mad_alert(stats, multiplier, metric="price", window=window)
             if alert:
+                # Apply cooldown check (use multiplier as proxy for zscore)
+                if cooldown_manager:
+                    key = cooldown_manager._make_key(market_id, "price", window)
+                    if not cooldown_manager.should_alert(key, alert.multiplier):
+                        continue  # Suppressed by cooldown
+                    cooldown_manager.record_alert(key, alert.multiplier)
+
+                # Add human-readable event info if available
+                if token_mapping and market_id in token_mapping:
+                    event_name, outcome = token_mapping[market_id]
+                    alert.event_name = event_name
+                    alert.outcome = outcome
+
                 alerts.append(alert)
 
     if alerts:

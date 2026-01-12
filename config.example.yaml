@@ -25,6 +25,15 @@ zscore_threshold: 3.5
 # MAD multiplier for price anomaly alerts via CLOB API (default: 3.0)
 mad_multiplier: 3.0
 
+# Alert cooldown settings - reduce alert fatigue for sustained anomalies
+# Cooldown period in minutes before re-alerting for the same anomaly (default: 30)
+# Set to 0 to disable cooldown (alerts fire every poll cycle)
+cooldown_minutes: 30
+
+# Z-score/MAD escalation threshold to re-alert during cooldown (default: 1.0)
+# If the z-score increases by this amount, alert immediately despite cooldown
+escalation_threshold: 1.0
+
 # Detectors to enable (default: all enabled)
 # Available detectors: spike, lvr, zscore, mad, closed
 # Options:
