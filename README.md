@@ -87,13 +87,6 @@ source .venv/bin/activate
 python -m src
 ```
 
-The bot will:
-1. Validate configured event slugs against Polymarket API
-2. Start polling at the configured interval
-3. Detect price spikes exceeding the threshold
-4. Analyze LVR for liquidity imbalances on spike events
-5. Send Telegram alerts for spikes and liquidity warnings
-
 Press `Ctrl+C` to gracefully stop the bot.
 
 ## Finding Event Slugs
@@ -105,24 +98,6 @@ Press `Ctrl+C` to gracefully stop the bot.
 ## Docker
 
 ### Pull and Run
-
-```bash
-# Pull the latest image
-docker pull ghcr.io/pab1it0/polybotz:latest
-```
-
-#### Option 1: Using Config File
-
-```bash
-docker run -d \
-  --name polybotz \
-  -v $(pwd)/config.yaml:/app/config.yaml:ro \
-  -e TELEGRAM_BOT_TOKEN="your-bot-token" \
-  -e TELEGRAM_CHAT_ID="your-chat-id" \
-  ghcr.io/pab1it0/polybotz:latest
-```
-
-#### Option 2: Environment Variables Only (No Config File)
 
 ```bash
 docker run -d \
@@ -155,12 +130,6 @@ docker run -d \
 ```
 
 ### Container Configuration
-
-The container supports two configuration modes:
-
-**Option 1: Config file** - Mount `config.yaml` to `/app/config.yaml`
-
-**Option 2: Environment variables only** - No config file needed
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
