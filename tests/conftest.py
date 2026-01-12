@@ -5,7 +5,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 from src.config import Configuration
-from src.models import LiquidityWarning, MonitoredEvent, MonitoredMarket, SpikeAlert
+from src.models import ClosedEventAlert, LiquidityWarning, MonitoredEvent, MonitoredMarket, SpikeAlert
 
 
 @pytest.fixture
@@ -369,3 +369,29 @@ def gamma_api_response_zero_liquidity():
             },
         ],
     }
+
+
+@pytest.fixture
+def closed_event_alert():
+    """A sample ClosedEventAlert."""
+    return ClosedEventAlert(
+        event_name="Test Event",
+        event_slug="test-event-slug",
+        market_question="Did this happen?",
+        outcome="Yes",
+        final_price=0.95,
+        detected_at=datetime(2024, 1, 15, 12, 30, 0),
+    )
+
+
+@pytest.fixture
+def closed_event_alert_no_price():
+    """A ClosedEventAlert without final price."""
+    return ClosedEventAlert(
+        event_name="Test Event",
+        event_slug="test-event-slug",
+        market_question="Did this happen?",
+        outcome="No",
+        final_price=None,
+        detected_at=datetime(2024, 1, 15, 12, 30, 0),
+    )

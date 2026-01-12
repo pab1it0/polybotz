@@ -5,7 +5,7 @@ import logging
 import httpx
 
 from .config import Configuration
-from .models import LiquidityWarning, MADAlert, SpikeAlert, ZScoreAlert
+from .models import ClosedEventAlert, LiquidityWarning, MADAlert, SpikeAlert, ZScoreAlert
 
 logger = logging.getLogger("polybotz.alerter")
 
@@ -76,6 +76,20 @@ def format_mad_alert(alert: MADAlert) -> str:
         f"*MAD*: {alert.mad:.4f}\n"
         f"*Deviation*: {alert.multiplier:.1f}x MAD ({direction} median)\n"
         f"*Threshold*: {alert.threshold_multiplier:.1f}x MAD\n"
+        f"*Time*: {alert.detected_at.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+    )
+
+
+def format_closed_event_alert(alert: ClosedEventAlert) -> str:
+    """Format a closed event alert as a Telegram Markdown message."""
+    price_str = f"{alert.final_price:.4f}" if alert.final_price is not None else "N/A"
+
+    return (
+        f"\u2705 *Market Closed*\n\n"
+        f"*Event*: {_escape_markdown(alert.event_name)}\n"
+        f"*Market*: {_escape_markdown(alert.market_question)}\n"
+        f"*Outcome*: {alert.outcome}\n"
+        f"*Final Price*: {price_str}\n"
         f"*Time*: {alert.detected_at.strftime('%Y-%m-%d %H:%M:%S')} UTC"
     )
 
@@ -235,4 +249,31 @@ async def send_all_mad_alerts(
 
     if alerts:
         logger.info(f"Sent {sent_count}/{len(alerts)} MAD alerts via Telegram")
+    return sent_count
+
+
+async def send_all_closed_event_alerts(
+    alerts: list[ClosedEventAlert],
+    config: Configuration,
+) -> int:
+    """Send all closed event alerts via Telegram, return count of successfully sent."""
+    sent_count = 0
+
+    for alert in alerts:
+        message = format_closed_event_alert(alert)
+        success = await send_telegram_alert(
+            config.telegram_bot_token,
+            config.telegram_chat_id,
+            message,
+        )
+
+        if success:
+            sent_count += 1
+        else:
+            logger.warning(
+                f"Failed to send closed event alert for {alert.market_question} [{alert.outcome}]"
+            )
+
+    if alerts:
+        logger.info(f"Sent {sent_count}/{len(alerts)} closed event alerts via Telegram")
     return sent_count

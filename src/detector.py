@@ -1,9 +1,11 @@
 """Spike detection algorithm for Polybotz."""
 
+import json
 import logging
 from datetime import datetime
 
 from .models import (
+    ClosedEventAlert,
     LiquidityWarning,
     MADAlert,
     MarketStatistics,
@@ -416,3 +418,93 @@ def detect_all_mad_alerts(
         logger.info(f"Total MAD alerts: {len(alerts)}")
 
     return alerts
+
+
+def detect_closed_markets(
+    events: dict[str, MonitoredEvent],
+    new_data: dict[str, dict],
+) -> tuple[list[ClosedEventAlert], list[str]]:
+    """
+    Detect markets that transitioned from open to closed.
+
+    Compares the new API data against existing event state to find
+    markets that just closed. Returns alerts for each transition
+    and a list of event slugs to remove (when all markets are closed).
+
+    Args:
+        events: Dict mapping slug to existing MonitoredEvent state
+        new_data: Dict mapping slug to raw API response data
+
+    Returns:
+        Tuple of (list of ClosedEventAlert, list of slugs to remove)
+    """
+    alerts = []
+    slugs_to_remove = []
+
+    for slug, event in events.items():
+        if slug not in new_data:
+            continue
+
+        api_event = new_data[slug]
+        api_markets = api_event.get("markets", [])
+
+        # Build lookup of API market data by question
+        api_market_lookup = {}
+        for api_market in api_markets:
+            question = api_market.get("question", "")
+            api_market_lookup[question] = api_market
+
+        all_closed = True
+        for market in event.markets:
+            api_market = api_market_lookup.get(market.question)
+            if api_market is None:
+                continue
+
+            new_closed = api_market.get("closed", False)
+
+            # Check for transition: was open, now closed
+            if new_closed and not market.is_closed:
+                # Get final price from API
+                final_price = None
+                outcome_prices = api_market.get("outcomePrices")
+                if outcome_prices:
+                    try:
+                        # outcomePrices is typically a JSON string like '["0.95", "0.05"]'
+                        if isinstance(outcome_prices, str):
+                            prices = json.loads(outcome_prices)
+                        else:
+                            prices = outcome_prices
+                        # Match outcome to price (Yes=0, No=1)
+                        idx = 0 if market.outcome.lower() == "yes" else 1
+                        if idx < len(prices):
+                            final_price = float(prices[idx])
+                    except (json.JSONDecodeError, ValueError, IndexError):
+                        final_price = market.current_price
+
+                alert = ClosedEventAlert(
+                    event_name=event.name,
+                    event_slug=slug,
+                    market_question=market.question,
+                    outcome=market.outcome,
+                    final_price=final_price,
+                    detected_at=datetime.now(),
+                )
+                alerts.append(alert)
+                logger.info(
+                    f"Market closed: {market.question} [{market.outcome}] "
+                    f"final_price={final_price}"
+                )
+
+            # Track if any market is still open
+            if not new_closed:
+                all_closed = False
+
+        # If all markets are closed, mark event for removal
+        if all_closed and event.markets:
+            slugs_to_remove.append(slug)
+            logger.info(f"All markets closed for event: {event.name}")
+
+    if alerts:
+        logger.info(f"Total closed market alerts: {len(alerts)}")
+
+    return alerts, slugs_to_remove

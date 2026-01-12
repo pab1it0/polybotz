@@ -11,6 +11,7 @@ import httpx
 
 from .alerter import (
     send_all_alerts,
+    send_all_closed_event_alerts,
     send_all_liquidity_warnings,
     send_all_mad_alerts,
     send_all_zscore_alerts,
@@ -22,9 +23,10 @@ from .detector import (
     detect_all_mad_alerts,
     detect_all_spikes,
     detect_all_zscore_alerts,
+    detect_closed_markets,
 )
 from .models import MarketStatistics, MonitoredEvent
-from .poller import parse_event_response, poll_all_events, validate_slugs
+from .poller import fetch_all_events_raw, parse_event_response, poll_all_events, validate_slugs
 from .statistics import update_market_statistics
 
 # Configure structured logging
@@ -67,7 +69,23 @@ async def run_poll_cycle(
     """Execute one poll → detect → alert cycle."""
     logger.info(f"Starting poll cycle for {len(events)} events")
 
-    # Poll all Gamma API events
+    # Fetch raw data first (before updating state)
+    raw_data = await fetch_all_events_raw(client, list(events.keys()))
+
+    # Detect closed markets BEFORE updating state
+    closed_alerts, slugs_to_remove = detect_closed_markets(events, raw_data)
+
+    # Send alerts for closed markets
+    if closed_alerts:
+        logger.info(f"Detected {len(closed_alerts)} closed market(s)")
+        await send_all_closed_event_alerts(closed_alerts, config)
+
+    # Remove fully-closed events from monitoring
+    for slug in slugs_to_remove:
+        logger.info(f"Removing closed event from monitoring: {slug}")
+        del events[slug]
+
+    # Poll all Gamma API events (updates remaining events)
     events = await poll_all_events(client, events)
 
     # Detect spikes from Gamma API

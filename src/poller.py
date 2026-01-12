@@ -195,3 +195,32 @@ async def poll_all_events(
         events[slug] = update_prices(event, data)
 
     return events
+
+
+async def fetch_all_events_raw(
+    client: httpx.AsyncClient,
+    slugs: list[str],
+) -> dict[str, dict]:
+    """
+    Fetch raw API data for all events without updating state.
+
+    Used for detecting state transitions (e.g., closed markets)
+    before updating the main event state.
+
+    Args:
+        client: HTTP client for API requests
+        slugs: List of event slugs to fetch
+
+    Returns:
+        Dict mapping slug to raw API response data
+    """
+    raw_data = {}
+
+    for slug in slugs:
+        logger.debug(f"Fetching raw data for: {slug}")
+        data = await fetch_event_by_slug(client, slug)
+
+        if data is not None:
+            raw_data[slug] = data
+
+    return raw_data

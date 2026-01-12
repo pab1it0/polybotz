@@ -119,3 +119,15 @@ class MADAlert:
     multiplier: float
     threshold_multiplier: float
     detected_at: datetime
+
+
+@dataclass
+class ClosedEventAlert:
+    """Alert when a market transitions from open to closed."""
+
+    event_name: str
+    event_slug: str
+    market_question: str
+    outcome: str
+    final_price: float | None
+    detected_at: datetime

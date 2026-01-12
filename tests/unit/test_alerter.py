@@ -5,16 +5,18 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
-from src.models import LiquidityWarning, MADAlert, SpikeAlert, ZScoreAlert
+from src.models import ClosedEventAlert, LiquidityWarning, MADAlert, SpikeAlert, ZScoreAlert
 from src.config import Configuration
 from src.alerter import (
     format_alert_message,
+    format_closed_event_alert,
     format_liquidity_warning_message,
     format_mad_alert,
     format_zscore_alert,
     _escape_markdown,
     send_telegram_alert,
     send_all_alerts,
+    send_all_closed_event_alerts,
     send_all_liquidity_warnings,
     send_all_mad_alerts,
     send_all_zscore_alerts,
@@ -824,3 +826,130 @@ class TestSendAllMADAlerts:
                 await send_all_mad_alerts([mad_alert], valid_config)
 
             assert "Sent 1/1 MAD alerts" in caplog.text
+
+
+class TestFormatClosedEventAlert:
+    """Tests for format_closed_event_alert function."""
+
+    def test_format_closed_event_alert_contains_event_name(self, closed_event_alert):
+        """Test message contains event name."""
+        message = format_closed_event_alert(closed_event_alert)
+        assert "Test Event" in message
+
+    def test_format_closed_event_alert_contains_market_question(self, closed_event_alert):
+        """Test message contains market question."""
+        message = format_closed_event_alert(closed_event_alert)
+        assert "Did this happen" in message
+
+    def test_format_closed_event_alert_contains_outcome(self, closed_event_alert):
+        """Test message contains outcome."""
+        message = format_closed_event_alert(closed_event_alert)
+        assert "Yes" in message
+
+    def test_format_closed_event_alert_contains_final_price(self, closed_event_alert):
+        """Test message contains final price."""
+        message = format_closed_event_alert(closed_event_alert)
+        assert "0.9500" in message
+
+    def test_format_closed_event_alert_no_price(self, closed_event_alert_no_price):
+        """Test message when final price is None."""
+        message = format_closed_event_alert(closed_event_alert_no_price)
+        assert "N/A" in message
+
+    def test_format_closed_event_alert_contains_timestamp(self, closed_event_alert):
+        """Test message contains timestamp."""
+        message = format_closed_event_alert(closed_event_alert)
+        assert "2024-01-15 12:30:00" in message
+
+    def test_format_closed_event_alert_markdown(self, closed_event_alert):
+        """Test message uses Markdown formatting."""
+        message = format_closed_event_alert(closed_event_alert)
+        assert "*Event*:" in message
+        assert "*Market*:" in message
+        assert "*Final Price*:" in message
+
+    def test_format_closed_event_alert_uses_checkmark(self, closed_event_alert):
+        """Test message uses checkmark emoji."""
+        message = format_closed_event_alert(closed_event_alert)
+        assert "\u2705" in message  # Checkmark emoji
+
+    def test_format_closed_event_alert_escapes_special_chars(self):
+        """Test special characters in event name are escaped."""
+        alert = ClosedEventAlert(
+            event_name="Test_Event*Name",
+            event_slug="test-slug",
+            market_question="Question_with*special",
+            outcome="Yes",
+            final_price=0.95,
+            detected_at=datetime(2024, 1, 15, 12, 30, 0),
+        )
+        message = format_closed_event_alert(alert)
+        assert "\\_" in message
+        assert "\\*" in message
+
+
+class TestSendAllClosedEventAlerts:
+    """Tests for send_all_closed_event_alerts function."""
+
+    @pytest.mark.asyncio
+    async def test_send_closed_alerts_success(self, valid_config, closed_event_alert, mock_telegram_success_response):
+        """Test sending multiple closed event alerts successfully."""
+        alerts = [closed_event_alert, closed_event_alert]
+
+        with patch("src.alerter.httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_telegram_success_response
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            count = await send_all_closed_event_alerts(alerts, valid_config)
+
+            assert count == 2
+            assert mock_client.post.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_send_closed_alerts_empty_list(self, valid_config):
+        """Test sending empty closed event alerts list."""
+        count = await send_all_closed_event_alerts([], valid_config)
+        assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_send_closed_alerts_partial_failure(self, valid_config, closed_event_alert):
+        """Test sending closed event alerts with partial failures."""
+        alerts = [closed_event_alert, closed_event_alert, closed_event_alert]
+
+        with patch("src.alerter.httpx.AsyncClient") as mock_client_class:
+            success_response = MagicMock()
+            success_response.status_code = 200
+            success_response.json.return_value = {"ok": True}
+
+            error_response = MagicMock()
+            error_response.status_code = 500
+
+            mock_client = AsyncMock()
+            mock_client.post.side_effect = [success_response, error_response, success_response]
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            count = await send_all_closed_event_alerts(alerts, valid_config)
+
+            assert count == 2
+
+    @pytest.mark.asyncio
+    async def test_send_closed_alerts_logging(self, valid_config, closed_event_alert, mock_telegram_success_response, caplog):
+        """Test logging during closed event alert sending."""
+        with patch("src.alerter.httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_telegram_success_response
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            with caplog.at_level("INFO"):
+                await send_all_closed_event_alerts([closed_event_alert], valid_config)
+
+            assert "Sent 1/1 closed event alerts" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_send_closed_alerts_no_logging_when_empty(self, valid_config, caplog):
+        """Test no logging when closed alerts list is empty."""
+        with caplog.at_level("INFO"):
+            await send_all_closed_event_alerts([], valid_config)
+
+        assert "closed event alerts" not in caplog.text
