@@ -19,6 +19,20 @@ spike_threshold: 5.0
 # Lower values = more sensitive, Higher values = only flag severe imbalances
 lvr_threshold: 8.0
 
+# Detectors to enable (default: all enabled)
+# Available detectors: spike, lvr, zscore, mad, closed
+# Options:
+#   - List specific detectors: [spike, lvr]
+#   - Enable all: "all"
+#   - Disable all (monitoring only): "none"
+#   - Omit field entirely to enable all (backward compatible)
+detectors:
+  - spike
+  - lvr
+  # - zscore  # Future: Z-score volume anomaly detection
+  # - mad     # Future: Median Absolute Deviation price anomaly
+  # - closed  # Future: Closed market detection
+
 # Telegram configuration
 telegram:
   # Bot token from @BotFather

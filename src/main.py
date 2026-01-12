@@ -88,23 +88,27 @@ async def run_poll_cycle(
     # Poll all Gamma API events (updates remaining events)
     events = await poll_all_events(client, events)
 
-    # Detect spikes from Gamma API
-    spikes = detect_all_spikes(list(events.values()), config.spike_threshold)
+    # Check if spike detector is enabled
+    if "spike" in config.detectors:
+        # Detect spikes from Gamma API
+        spikes = detect_all_spikes(list(events.values()), config.spike_threshold)
 
-    if spikes:
-        logger.info(f"Detected {len(spikes)} spike(s)")
-        await send_all_alerts(spikes, config)
+        if spikes:
+            logger.info(f"Detected {len(spikes)} spike(s)")
+            await send_all_alerts(spikes, config)
 
-        # Detect liquidity warnings for spikes with high LVR
-        warnings = detect_all_liquidity_warnings(
-            list(events.values()),
-            spikes,
-            config.lvr_threshold,
-        )
-        if warnings:
-            await send_all_liquidity_warnings(warnings, config)
-    else:
-        logger.debug("No spikes detected")
+            # Check if LVR detector is enabled
+            if "lvr" in config.detectors:
+                # Detect liquidity warnings for spikes with high LVR
+                warnings = detect_all_liquidity_warnings(
+                    list(events.values()),
+                    spikes,
+                    config.lvr_threshold,
+                )
+                if warnings:
+                    await send_all_liquidity_warnings(warnings, config)
+        else:
+            logger.debug("No spikes detected")
 
     # Poll CLOB markets - use config override or extract from events
     clob_token_ids = config.clob_token_ids if config.clob_token_ids else extract_clob_token_ids(events)
@@ -186,6 +190,12 @@ async def main_async() -> int:
     except ConfigurationError as e:
         logger.error(f"Configuration error: {e}")
         return 1
+
+    # Log enabled detectors
+    if config.detectors:
+        logger.info(f"Enabled detectors: {', '.join(sorted(config.detectors))}")
+    else:
+        logger.info("No detectors enabled (monitoring only mode)")
 
     # Validate slugs on startup
     logger.info(f"Validating {len(config.slugs)} configured slugs...")

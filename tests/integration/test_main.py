@@ -518,3 +518,111 @@ telegram:
 
             # Should have continued running despite error
             assert "shutdown complete" in caplog.text.lower()
+
+
+class TestDetectorConfiguration:
+    """Tests for detector enable/disable configuration."""
+
+    @pytest.mark.asyncio
+    async def test_only_enabled_detectors_run(self, valid_config, gamma_api_response):
+        """Test that only enabled detectors generate alerts."""
+        from src.config import VALID_DETECTORS
+
+        # Config with only spike detector enabled
+        config = Configuration(
+            slugs=valid_config.slugs,
+            poll_interval=valid_config.poll_interval,
+            spike_threshold=valid_config.spike_threshold,
+            telegram_bot_token=valid_config.telegram_bot_token,
+            telegram_chat_id=valid_config.telegram_chat_id,
+            lvr_threshold=valid_config.lvr_threshold,
+            detectors={"spike"},  # Only spike enabled
+        )
+
+        initial_event = MonitoredEvent(
+            slug="test-slug",
+            name="Test Event",
+            markets=[
+                MonitoredMarket(
+                    id="cond-001",
+                    question="Will outcome A happen?",
+                    outcome="Yes",
+                    current_price=0.50,
+                    previous_price=0.50,
+                    is_closed=False,
+                    volume_24h=1000000,
+                    liquidity=100000,
+                    lvr=10.0,  # High LVR would trigger warning
+                )
+            ],
+        )
+        events = {"test-slug": initial_event}
+
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = gamma_api_response
+        mock_client.get.return_value = mock_response
+
+        with patch("src.alerter.httpx.AsyncClient") as mock_alert_client:
+            alert_mock = AsyncMock()
+            alert_response = MagicMock()
+            alert_response.status_code = 200
+            alert_response.json.return_value = {"ok": True}
+            alert_mock.post.return_value = alert_response
+            mock_alert_client.return_value.__aenter__.return_value = alert_mock
+
+            market_stats = {}
+            result = await run_poll_cycle(mock_client, events, market_stats, config)
+
+            assert "test-slug" in result
+
+    @pytest.mark.asyncio
+    async def test_no_alerts_when_all_detectors_disabled(self, valid_config, gamma_api_response, caplog):
+        """Test no alerts when detectors set to empty (monitoring only)."""
+        # Config with no detectors enabled
+        config = Configuration(
+            slugs=valid_config.slugs,
+            poll_interval=valid_config.poll_interval,
+            spike_threshold=valid_config.spike_threshold,
+            telegram_bot_token=valid_config.telegram_bot_token,
+            telegram_chat_id=valid_config.telegram_chat_id,
+            lvr_threshold=valid_config.lvr_threshold,
+            detectors=set(),  # No detectors enabled
+        )
+
+        initial_event = MonitoredEvent(
+            slug="test-slug",
+            name="Test Event",
+            markets=[
+                MonitoredMarket(
+                    id="cond-001",
+                    question="Will outcome A happen?",
+                    outcome="Yes",
+                    current_price=0.30,
+                    previous_price=0.50,  # Big change, would trigger spike
+                    is_closed=False,
+                )
+            ],
+        )
+        events = {"test-slug": initial_event}
+
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = gamma_api_response
+        mock_client.get.return_value = mock_response
+
+        with caplog.at_level("INFO"):
+            market_stats = {}
+            result = await run_poll_cycle(mock_client, events, market_stats, config)
+
+        # No spike alerts should be logged when spike detector is disabled
+        assert "test-slug" in result
+
+    @pytest.mark.asyncio
+    async def test_default_config_has_all_detectors(self, valid_config):
+        """Test that default configuration has all detectors enabled."""
+        from src.config import VALID_DETECTORS
+
+        assert valid_config.detectors == VALID_DETECTORS

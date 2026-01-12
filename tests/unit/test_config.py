@@ -6,10 +6,12 @@ import os
 from src.config import (
     Configuration,
     ConfigurationError,
+    VALID_DETECTORS,
     _substitute_env_vars,
     _process_yaml_values,
     load_config,
     load_config_from_env,
+    parse_detectors,
     validate_config,
 )
 
@@ -500,3 +502,337 @@ telegram:
         with pytest.raises(ConfigurationError) as exc_info:
             load_config(config_file)
         assert "lvr_threshold" in str(exc_info.value)
+
+
+class TestParseDetectors:
+    """Tests for parse_detectors function."""
+
+    def test_parse_none_returns_all(self):
+        """Test None returns all detectors (default behavior)."""
+        result = parse_detectors(None)
+        assert result == VALID_DETECTORS
+
+    def test_parse_all_string(self):
+        """Test 'all' string returns all detectors."""
+        result = parse_detectors("all")
+        assert result == VALID_DETECTORS
+
+    def test_parse_all_case_insensitive(self):
+        """Test 'ALL' is case insensitive."""
+        result = parse_detectors("ALL")
+        assert result == VALID_DETECTORS
+        result = parse_detectors("All")
+        assert result == VALID_DETECTORS
+
+    def test_parse_none_string(self):
+        """Test 'none' string returns empty set."""
+        result = parse_detectors("none")
+        assert result == set()
+
+    def test_parse_none_case_insensitive(self):
+        """Test 'NONE' is case insensitive."""
+        result = parse_detectors("NONE")
+        assert result == set()
+        result = parse_detectors("None")
+        assert result == set()
+
+    def test_parse_comma_separated(self):
+        """Test comma-separated string parsing."""
+        result = parse_detectors("spike,lvr")
+        assert result == {"spike", "lvr"}
+
+    def test_parse_comma_separated_with_spaces(self):
+        """Test comma-separated string handles whitespace."""
+        result = parse_detectors(" spike , lvr , zscore ")
+        assert result == {"spike", "lvr", "zscore"}
+
+    def test_parse_list(self):
+        """Test list parsing."""
+        result = parse_detectors(["spike", "lvr", "mad"])
+        assert result == {"spike", "lvr", "mad"}
+
+    def test_parse_list_with_spaces(self):
+        """Test list parsing handles whitespace in items."""
+        result = parse_detectors([" spike ", " lvr "])
+        assert result == {"spike", "lvr"}
+
+    def test_parse_single_detector(self):
+        """Test single detector string."""
+        result = parse_detectors("spike")
+        assert result == {"spike"}
+
+    def test_parse_case_insensitive_names(self):
+        """Test detector names are case insensitive."""
+        result = parse_detectors("SPIKE,LVR,ZScore")
+        assert result == {"spike", "lvr", "zscore"}
+
+    def test_parse_invalid_detector_ignored(self, caplog):
+        """Test invalid detector names are ignored with warning."""
+        import logging
+        with caplog.at_level(logging.WARNING):
+            result = parse_detectors("spike,invalid,lvr")
+        assert result == {"spike", "lvr"}
+        assert "Invalid detector names ignored" in caplog.text
+        assert "invalid" in caplog.text
+
+    def test_parse_all_invalid_returns_empty(self, caplog):
+        """Test all invalid names returns empty set."""
+        import logging
+        with caplog.at_level(logging.WARNING):
+            result = parse_detectors("invalid1,invalid2")
+        assert result == set()
+        assert "Invalid detector names ignored" in caplog.text
+
+    def test_parse_empty_string(self):
+        """Test empty string returns empty set."""
+        result = parse_detectors("")
+        assert result == set()
+
+    def test_parse_empty_list(self):
+        """Test empty list returns empty set."""
+        result = parse_detectors([])
+        assert result == set()
+
+    def test_parse_all_valid_detectors(self):
+        """Test parsing all valid detector names."""
+        result = parse_detectors("spike,lvr,zscore,mad,closed")
+        assert result == VALID_DETECTORS
+
+    def test_parse_duplicate_detectors(self):
+        """Test duplicate detectors are deduplicated."""
+        result = parse_detectors("spike,spike,lvr,lvr")
+        assert result == {"spike", "lvr"}
+
+
+class TestLoadConfigWithDetectors:
+    """Tests for loading config with detectors field (YAML)."""
+
+    def test_load_config_default_detectors(self, tmp_path):
+        """Test config uses all detectors by default when field missing."""
+        config_yaml = """
+slugs:
+  - "test-slug"
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        config = load_config(config_file)
+
+        assert config.detectors == VALID_DETECTORS
+
+    def test_load_config_detectors_list(self, tmp_path):
+        """Test loading config with detectors as list."""
+        config_yaml = """
+slugs:
+  - "test-slug"
+detectors:
+  - spike
+  - lvr
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        config = load_config(config_file)
+
+        assert config.detectors == {"spike", "lvr"}
+
+    def test_load_config_detectors_all(self, tmp_path):
+        """Test loading config with detectors: all."""
+        config_yaml = """
+slugs:
+  - "test-slug"
+detectors: all
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        config = load_config(config_file)
+
+        assert config.detectors == VALID_DETECTORS
+
+    def test_load_config_detectors_none(self, tmp_path):
+        """Test loading config with detectors: none."""
+        config_yaml = """
+slugs:
+  - "test-slug"
+detectors: none
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        config = load_config(config_file)
+
+        assert config.detectors == set()
+
+    def test_load_config_detectors_with_invalid(self, tmp_path, caplog):
+        """Test loading config with some invalid detector names."""
+        import logging
+        config_yaml = """
+slugs:
+  - "test-slug"
+detectors:
+  - spike
+  - invalid
+  - lvr
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        with caplog.at_level(logging.WARNING):
+            config = load_config(config_file)
+
+        assert config.detectors == {"spike", "lvr"}
+        assert "Invalid detector names ignored" in caplog.text
+
+
+class TestLoadConfigFromEnvWithDetectors:
+    """Tests for loading config from env with detectors."""
+
+    def test_env_detectors_comma_separated(self, monkeypatch):
+        """Test loading detectors from POLYBOTZ_DETECTORS env var."""
+        monkeypatch.setenv("POLYBOTZ_SLUGS", "test-slug")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+        monkeypatch.setenv("POLYBOTZ_DETECTORS", "spike,lvr")
+
+        config = load_config_from_env()
+
+        assert config.detectors == {"spike", "lvr"}
+
+    def test_env_detectors_all(self, monkeypatch):
+        """Test POLYBOTZ_DETECTORS=all enables all detectors."""
+        monkeypatch.setenv("POLYBOTZ_SLUGS", "test-slug")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+        monkeypatch.setenv("POLYBOTZ_DETECTORS", "all")
+
+        config = load_config_from_env()
+
+        assert config.detectors == VALID_DETECTORS
+
+    def test_env_detectors_none(self, monkeypatch):
+        """Test POLYBOTZ_DETECTORS=none disables all detectors."""
+        monkeypatch.setenv("POLYBOTZ_SLUGS", "test-slug")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+        monkeypatch.setenv("POLYBOTZ_DETECTORS", "none")
+
+        config = load_config_from_env()
+
+        assert config.detectors == set()
+
+    def test_env_detectors_not_set_defaults_to_all(self, monkeypatch):
+        """Test missing POLYBOTZ_DETECTORS defaults to all detectors."""
+        monkeypatch.setenv("POLYBOTZ_SLUGS", "test-slug")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+        monkeypatch.delenv("POLYBOTZ_DETECTORS", raising=False)
+
+        config = load_config_from_env()
+
+        assert config.detectors == VALID_DETECTORS
+
+
+class TestEnvVarPrecedence:
+    """Tests for environment variable precedence over config file."""
+
+    def test_env_var_overrides_config_file(self, tmp_path, monkeypatch):
+        """Test POLYBOTZ_DETECTORS env var takes precedence over config file."""
+        config_yaml = """
+slugs:
+  - "test-slug"
+detectors:
+  - spike
+  - lvr
+  - zscore
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        # Set env var to override
+        monkeypatch.setenv("POLYBOTZ_DETECTORS", "spike")
+
+        config = load_config(config_file)
+
+        # Env var should win
+        assert config.detectors == {"spike"}
+
+    def test_no_env_var_uses_config_file(self, tmp_path, monkeypatch):
+        """Test config file is used when env var not set."""
+        monkeypatch.delenv("POLYBOTZ_DETECTORS", raising=False)
+
+        config_yaml = """
+slugs:
+  - "test-slug"
+detectors:
+  - spike
+  - lvr
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        config = load_config(config_file)
+
+        assert config.detectors == {"spike", "lvr"}
+
+    def test_env_var_all_overrides_config_list(self, tmp_path, monkeypatch):
+        """Test POLYBOTZ_DETECTORS=all overrides config file list."""
+        config_yaml = """
+slugs:
+  - "test-slug"
+detectors:
+  - spike
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        monkeypatch.setenv("POLYBOTZ_DETECTORS", "all")
+
+        config = load_config(config_file)
+
+        assert config.detectors == VALID_DETECTORS
+
+    def test_env_var_none_overrides_config_list(self, tmp_path, monkeypatch):
+        """Test POLYBOTZ_DETECTORS=none overrides config file list."""
+        config_yaml = """
+slugs:
+  - "test-slug"
+detectors:
+  - spike
+  - lvr
+telegram:
+  bot_token: "token"
+  chat_id: "chatid"
+"""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_yaml)
+
+        monkeypatch.setenv("POLYBOTZ_DETECTORS", "none")
+
+        config = load_config(config_file)
+
+        assert config.detectors == set()
