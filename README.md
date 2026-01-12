@@ -98,12 +98,15 @@ Press `Ctrl+C` to gracefully stop the bot.
 
 ## Detectors
 
-Polybotz uses modular detectors to identify different types of market anomalies:
+Polybotz uses modular detectors to identify different types of market anomalies. All detectors can be individually enabled/disabled via `detectors` config or `POLYBOTZ_DETECTORS` env var.
 
-| Detector | Description |
-|----------|-------------|
-| `spike` | Price spike detection exceeding threshold |
-| `lvr` | Liquidity-to-Volume Ratio analysis for liquidity warnings |
+| Detector | Description | Configuration |
+|----------|-------------|---------------|
+| `spike` | Price spike detection exceeding threshold | `spike_threshold` |
+| `lvr` | Liquidity-to-Volume Ratio analysis for liquidity warnings | `lvr_threshold` |
+| `zscore` | Z-score based volume anomaly detection via CLOB API | `zscore_threshold` |
+| `mad` | Median Absolute Deviation price anomaly via CLOB API | `mad_multiplier` |
+| `closed` | Closed market detection with auto-removal | None |
 
 See [docs/detectors.md](docs/detectors.md) for detailed documentation on all detectors, configuration options, and health classifications.
 

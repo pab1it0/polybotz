@@ -72,18 +72,20 @@ async def run_poll_cycle(
     # Fetch raw data first (before updating state)
     raw_data = await fetch_all_events_raw(client, list(events.keys()))
 
-    # Detect closed markets BEFORE updating state
-    closed_alerts, slugs_to_remove = detect_closed_markets(events, raw_data)
+    # Check if closed detector is enabled
+    if "closed" in config.detectors:
+        # Detect closed markets BEFORE updating state
+        closed_alerts, slugs_to_remove = detect_closed_markets(events, raw_data)
 
-    # Send alerts for closed markets
-    if closed_alerts:
-        logger.info(f"Detected {len(closed_alerts)} closed market(s)")
-        await send_all_closed_event_alerts(closed_alerts, config)
+        # Send alerts for closed markets
+        if closed_alerts:
+            logger.info(f"Detected {len(closed_alerts)} closed market(s)")
+            await send_all_closed_event_alerts(closed_alerts, config)
 
-    # Remove fully-closed events from monitoring
-    for slug in slugs_to_remove:
-        logger.info(f"Removing closed event from monitoring: {slug}")
-        del events[slug]
+        # Remove fully-closed events from monitoring
+        for slug in slugs_to_remove:
+            logger.info(f"Removing closed event from monitoring: {slug}")
+            del events[slug]
 
     # Poll all Gamma API events (updates remaining events)
     events = await poll_all_events(client, events)
@@ -156,17 +158,21 @@ async def run_clob_poll_cycle(
             f"(need {min_obs} observations)"
         )
 
-    # Detect Z-score alerts (volume spikes)
-    zscore_alerts = detect_all_zscore_alerts(market_stats, config.zscore_threshold)
-    if zscore_alerts:
-        logger.info(f"Detected {len(zscore_alerts)} Z-score alert(s)")
-        await send_all_zscore_alerts(zscore_alerts, config)
+    # Check if zscore detector is enabled
+    if "zscore" in config.detectors:
+        # Detect Z-score alerts (volume spikes)
+        zscore_alerts = detect_all_zscore_alerts(market_stats, config.zscore_threshold)
+        if zscore_alerts:
+            logger.info(f"Detected {len(zscore_alerts)} Z-score alert(s)")
+            await send_all_zscore_alerts(zscore_alerts, config)
 
-    # Detect MAD alerts (price anomalies)
-    mad_alerts = detect_all_mad_alerts(market_stats, config.mad_multiplier)
-    if mad_alerts:
-        logger.info(f"Detected {len(mad_alerts)} MAD alert(s)")
-        await send_all_mad_alerts(mad_alerts, config)
+    # Check if mad detector is enabled
+    if "mad" in config.detectors:
+        # Detect MAD alerts (price anomalies)
+        mad_alerts = detect_all_mad_alerts(market_stats, config.mad_multiplier)
+        if mad_alerts:
+            logger.info(f"Detected {len(mad_alerts)} MAD alert(s)")
+            await send_all_mad_alerts(mad_alerts, config)
 
 
 async def main_async() -> int:
