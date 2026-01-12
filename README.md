@@ -1,4 +1,4 @@
-# Polybotz
+# Polybot-Z
 
 A Python bot that periodically monitors Polymarket's market events, detects anomalous spikes and liquidity imbalances, and sends real-time alerts. Uses the [Polymarket Gamma API](https://gamma-api.polymarket.com) to fetch market data.
 
