@@ -9,6 +9,7 @@ from src.config import (
     _substitute_env_vars,
     _process_yaml_values,
     load_config,
+    load_config_from_env,
     validate_config,
 )
 
@@ -133,11 +134,13 @@ class TestLoadConfig:
         assert config.telegram_bot_token == "env-token-123"
         assert config.telegram_chat_id == "env-chat-456"
 
-    def test_load_missing_file(self, tmp_path):
-        """Test loading non-existent config file."""
+    def test_load_missing_file_falls_back_to_env(self, tmp_path):
+        """Test loading non-existent config file falls back to env vars."""
+        # When file doesn't exist and env vars aren't set, validation fails
         with pytest.raises(ConfigurationError) as exc_info:
             load_config(tmp_path / "missing.yaml")
-        assert "not found" in str(exc_info.value)
+        # Should fail validation due to missing required env vars
+        assert "slugs" in str(exc_info.value) or "telegram" in str(exc_info.value)
 
     def test_load_empty_file(self, tmp_path):
         """Test loading empty config file."""
@@ -164,6 +167,61 @@ telegram:
 
         assert config.poll_interval == 60
         assert config.spike_threshold == 5.0
+
+
+class TestLoadConfigFromEnv:
+    """Tests for load_config_from_env function."""
+
+    def test_load_from_env_all_vars(self, monkeypatch):
+        """Test loading config entirely from environment variables."""
+        monkeypatch.setenv("POLYBOTZ_SLUGS", "slug1,slug2,slug3")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "env-token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "env-chat")
+        monkeypatch.setenv("POLYBOTZ_POLL_INTERVAL", "30")
+        monkeypatch.setenv("POLYBOTZ_SPIKE_THRESHOLD", "3.5")
+        monkeypatch.setenv("POLYBOTZ_LVR_THRESHOLD", "5.0")
+
+        config = load_config_from_env()
+
+        assert config.slugs == ["slug1", "slug2", "slug3"]
+        assert config.telegram_bot_token == "env-token"
+        assert config.telegram_chat_id == "env-chat"
+        assert config.poll_interval == 30
+        assert config.spike_threshold == 3.5
+        assert config.lvr_threshold == 5.0
+
+    def test_load_from_env_defaults(self, monkeypatch):
+        """Test loading config uses defaults for optional vars."""
+        monkeypatch.setenv("POLYBOTZ_SLUGS", "test-slug")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+
+        config = load_config_from_env()
+
+        assert config.slugs == ["test-slug"]
+        assert config.poll_interval == 60
+        assert config.spike_threshold == 5.0
+        assert config.lvr_threshold == 8.0
+
+    def test_load_from_env_missing_required(self, monkeypatch):
+        """Test loading from env fails when required vars missing."""
+        # Only set some vars, missing POLYBOTZ_SLUGS
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            load_config_from_env()
+        assert "slugs" in str(exc_info.value)
+
+    def test_load_from_env_comma_separated_slugs(self, monkeypatch):
+        """Test slug parsing handles whitespace correctly."""
+        monkeypatch.setenv("POLYBOTZ_SLUGS", " slug1 , slug2 , slug3 ")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+
+        config = load_config_from_env()
+
+        assert config.slugs == ["slug1", "slug2", "slug3"]
 
 
 class TestValidateConfig:

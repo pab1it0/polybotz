@@ -117,3 +117,117 @@ This helps identify price movements that may be driven by low liquidity rather t
 1. Go to [Polymarket](https://polymarket.com)
 2. Find an event you want to monitor
 3. Copy the slug from the URL: `https://polymarket.com/event/{slug}`
+
+## Docker
+
+### Pull and Run
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/pab1it0/polybotz:latest
+```
+
+#### Option 1: Using Config File
+
+```bash
+docker run -d \
+  --name polybotz \
+  -v $(pwd)/config.yaml:/app/config.yaml:ro \
+  -e TELEGRAM_BOT_TOKEN="your-bot-token" \
+  -e TELEGRAM_CHAT_ID="your-chat-id" \
+  ghcr.io/pab1it0/polybotz:latest
+```
+
+#### Option 2: Environment Variables Only (No Config File)
+
+```bash
+docker run -d \
+  --name polybotz \
+  -e POLYBOTZ_SLUGS="slug1,slug2,slug3" \
+  -e TELEGRAM_BOT_TOKEN="your-bot-token" \
+  -e TELEGRAM_CHAT_ID="your-chat-id" \
+  -e POLYBOTZ_POLL_INTERVAL="60" \
+  -e POLYBOTZ_SPIKE_THRESHOLD="5.0" \
+  -e POLYBOTZ_LVR_THRESHOLD="8.0" \
+  ghcr.io/pab1it0/polybotz:latest
+```
+
+### Build Locally
+
+```bash
+# Build the image
+docker build -t polybotz:local .
+
+# Run with environment variables only
+docker run -d \
+  --name polybotz \
+  -e POLYBOTZ_SLUGS="slug1,slug2" \
+  -e TELEGRAM_BOT_TOKEN="your-bot-token" \
+  -e TELEGRAM_CHAT_ID="your-chat-id" \
+  polybotz:local
+```
+
+### Container Configuration
+
+The container supports two configuration modes:
+
+**Option 1: Config file** - Mount `config.yaml` to `/app/config.yaml`
+
+**Option 2: Environment variables only** - No config file needed
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `POLYBOTZ_SLUGS` | Yes* | - | Comma-separated list of event slugs |
+| `TELEGRAM_BOT_TOKEN` | Yes | - | Telegram bot API token |
+| `TELEGRAM_CHAT_ID` | Yes | - | Telegram chat ID for alerts |
+| `POLYBOTZ_POLL_INTERVAL` | No | 60 | Seconds between polls |
+| `POLYBOTZ_SPIKE_THRESHOLD` | No | 5.0 | Percentage for spike alerts |
+| `POLYBOTZ_LVR_THRESHOLD` | No | 8.0 | LVR threshold for warnings |
+
+*Required only when not using a config file
+
+### Container Operations
+
+```bash
+# View logs
+docker logs -f polybotz
+
+# Stop the container
+docker stop polybotz
+
+# Start the container
+docker start polybotz
+
+# Remove the container
+docker rm polybotz
+```
+
+### Troubleshooting
+
+**Container exits immediately**
+
+Check logs for configuration errors:
+```bash
+docker logs polybotz
+```
+
+Common issues:
+- Missing configuration - either mount `config.yaml` or set `POLYBOTZ_SLUGS` environment variable
+- Missing Telegram credentials - verify `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set
+- Invalid event slugs - check slugs exist on Polymarket
+
+**Permission denied on config file**
+
+Ensure the config file is readable:
+```bash
+chmod 644 config.yaml
+```
+
+### Image Tags
+
+| Tag | Description |
+|-----|-------------|
+| `latest` | Most recent stable release |
+| `main` | Latest main branch build |
+| `X.Y.Z` | Specific version release |
+| `sha-XXXXXXX` | Specific commit build |
