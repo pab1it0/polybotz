@@ -50,9 +50,20 @@ def format_zscore_alert(alert: ZScoreAlert) -> str:
     """Format a Z-score alert as a Telegram Markdown message."""
     direction = "spike" if alert.zscore > 0 else "drop"
 
+    # Use human-readable event info if available, otherwise fallback to market_id
+    if alert.event_name and alert.outcome:
+        identifier_lines = (
+            f"*Event*: {_escape_markdown(alert.event_name)}\n"
+            f"*Outcome*: {alert.outcome}\n"
+        )
+    else:
+        identifier_lines = (
+            f"*Token*: {_escape_markdown(alert.market_id)} _\\(event details unavailable\\)_\n"
+        )
+
     return (
         f"\U0001F4CA *Z-Score Alert*\n\n"
-        f"*Market*: {_escape_markdown(alert.market_id)}\n"
+        f"{identifier_lines}"
         f"*Metric*: {alert.metric} ({alert.window})\n"
         f"*Current*: {alert.current_value:.4f}\n"
         f"*Median*: {alert.median:.4f}\n"
@@ -67,9 +78,20 @@ def format_mad_alert(alert: MADAlert) -> str:
     """Format a MAD alert as a Telegram Markdown message."""
     direction = "above" if alert.current_value > alert.median else "below"
 
+    # Use human-readable event info if available, otherwise fallback to market_id
+    if alert.event_name and alert.outcome:
+        identifier_lines = (
+            f"*Event*: {_escape_markdown(alert.event_name)}\n"
+            f"*Outcome*: {alert.outcome}\n"
+        )
+    else:
+        identifier_lines = (
+            f"*Token*: {_escape_markdown(alert.market_id)} _\\(event details unavailable\\)_\n"
+        )
+
     return (
         f"\U0001F4C8 *MAD Alert*\n\n"
-        f"*Market*: {_escape_markdown(alert.market_id)}\n"
+        f"{identifier_lines}"
         f"*Metric*: {alert.metric} ({alert.window})\n"
         f"*Current*: {alert.current_value:.4f}\n"
         f"*Median*: {alert.median:.4f}\n"

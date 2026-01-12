@@ -92,6 +92,15 @@ class MarketStatistics:
 
 
 @dataclass
+class CooldownEntry:
+    """Tracks cooldown state for a specific (market_id, metric, window) tuple."""
+
+    key: str  # Format: "{market_id}:{metric}:{window}"
+    last_alert_time: datetime
+    last_zscore: float
+
+
+@dataclass
 class ZScoreAlert:
     """Alert triggered when Z-score exceeds threshold."""
 
@@ -104,6 +113,8 @@ class ZScoreAlert:
     zscore: float
     threshold: float
     detected_at: datetime
+    event_name: str | None = None  # Human-readable event name
+    outcome: str | None = None  # "Yes" or "No" outcome
 
 
 @dataclass
@@ -119,6 +130,8 @@ class MADAlert:
     multiplier: float
     threshold_multiplier: float
     detected_at: datetime
+    event_name: str | None = None  # Human-readable event name
+    outcome: str | None = None  # "Yes" or "No" outcome
 
 
 @dataclass

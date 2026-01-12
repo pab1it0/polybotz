@@ -29,6 +29,9 @@ class Configuration:
     zscore_threshold: float = 3.5
     mad_multiplier: float = 3.0
     detectors: set[str] = field(default_factory=lambda: VALID_DETECTORS.copy())
+    # Alert cooldown configuration
+    cooldown_minutes: int = 30
+    escalation_threshold: float = 1.0
 
     def __post_init__(self):
         if self.clob_token_ids is None:
@@ -169,6 +172,17 @@ def load_config_from_env() -> Configuration:
     detectors_str = os.environ.get("POLYBOTZ_DETECTORS")
     detectors = parse_detectors(detectors_str)
 
+    # Parse cooldown configuration
+    try:
+        cooldown_minutes = int(os.environ.get("POLYBOTZ_COOLDOWN_MINUTES", "30"))
+    except ValueError:
+        cooldown_minutes = 30
+
+    try:
+        escalation_threshold = float(os.environ.get("POLYBOTZ_ESCALATION_THRESHOLD", "1.0"))
+    except ValueError:
+        escalation_threshold = 1.0
+
     config = Configuration(
         slugs=slugs,
         poll_interval=poll_interval,
@@ -180,6 +194,8 @@ def load_config_from_env() -> Configuration:
         zscore_threshold=zscore_threshold,
         mad_multiplier=mad_multiplier,
         detectors=detectors,
+        cooldown_minutes=cooldown_minutes,
+        escalation_threshold=escalation_threshold,
     )
 
     validate_config(config)
@@ -232,6 +248,8 @@ def load_config(config_path: str | Path | None = None) -> Configuration:
             zscore_threshold=data.get("zscore_threshold", 3.5),
             mad_multiplier=data.get("mad_multiplier", 3.0),
             detectors=detectors,
+            cooldown_minutes=data.get("cooldown_minutes", 30),
+            escalation_threshold=data.get("escalation_threshold", 1.0),
         )
 
         validate_config(config)
@@ -276,6 +294,14 @@ def validate_config(config: Configuration) -> None:
     # telegram_chat_id: Non-empty string
     if not config.telegram_chat_id:
         errors.append("telegram.chat_id: must be a non-empty string")
+
+    # cooldown_minutes: Non-negative integer (0 = disabled)
+    if not isinstance(config.cooldown_minutes, int) or config.cooldown_minutes < 0:
+        errors.append("cooldown_minutes: must be a non-negative integer (0 to disable)")
+
+    # escalation_threshold: Positive float
+    if not isinstance(config.escalation_threshold, (int, float)) or config.escalation_threshold <= 0:
+        errors.append("escalation_threshold: must be a positive number > 0")
 
     if errors:
         raise ConfigurationError("Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors))

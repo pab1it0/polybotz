@@ -19,6 +19,7 @@ from .alerter import (
 from .clob_client import poll_clob_markets
 from .config import ConfigurationError, load_config
 from .detector import (
+    CooldownManager,
     detect_all_liquidity_warnings,
     detect_all_mad_alerts,
     detect_all_spikes,
@@ -53,6 +54,23 @@ def extract_clob_token_ids(events: dict[str, MonitoredEvent]) -> list[str]:
     return token_ids
 
 
+def build_token_event_mapping(events: dict[str, MonitoredEvent]) -> dict[str, tuple[str, str]]:
+    """Build mapping from CLOB token ID to (event_name, outcome).
+
+    Args:
+        events: Dict mapping slug to MonitoredEvent
+
+    Returns:
+        Dict mapping token_id to (event_name, outcome) tuple
+    """
+    mapping = {}
+    for event in events.values():
+        for market in event.markets:
+            if market.clob_token_id:
+                mapping[market.clob_token_id] = (event.name, market.outcome)
+    return mapping
+
+
 def handle_shutdown(signum: int, frame) -> None:
     """Handle SIGINT/SIGTERM for graceful shutdown."""
     global shutdown_requested
@@ -65,9 +83,14 @@ async def run_poll_cycle(
     events: dict[str, MonitoredEvent],
     market_stats: dict[str, MarketStatistics],
     config,
+    cooldown_manager: CooldownManager | None = None,
 ) -> dict[str, MonitoredEvent]:
     """Execute one poll → detect → alert cycle."""
     logger.info(f"Starting poll cycle for {len(events)} events")
+
+    # Cleanup stale cooldown entries at start of each cycle
+    if cooldown_manager:
+        cooldown_manager.cleanup_stale()
 
     # Fetch raw data first (before updating state)
     raw_data = await fetch_all_events_raw(client, list(events.keys()))
@@ -115,7 +138,11 @@ async def run_poll_cycle(
     # Poll CLOB markets - use config override or extract from events
     clob_token_ids = config.clob_token_ids if config.clob_token_ids else extract_clob_token_ids(events)
     if clob_token_ids:
-        await run_clob_poll_cycle(client, market_stats, clob_token_ids, config)
+        # Build token-to-event mapping for human-readable alerts
+        token_mapping = build_token_event_mapping(events)
+        await run_clob_poll_cycle(
+            client, market_stats, clob_token_ids, config, cooldown_manager, token_mapping
+        )
 
     logger.info("Poll cycle completed")
     return events
@@ -126,6 +153,8 @@ async def run_clob_poll_cycle(
     market_stats: dict[str, MarketStatistics],
     clob_token_ids: list[str],
     config,
+    cooldown_manager: CooldownManager | None = None,
+    token_mapping: dict[str, tuple[str, str]] | None = None,
 ) -> None:
     """Execute CLOB polling and Z-score/MAD detection cycle."""
     logger.debug(f"Polling {len(clob_token_ids)} CLOB markets")
@@ -161,7 +190,12 @@ async def run_clob_poll_cycle(
     # Check if zscore detector is enabled
     if "zscore" in config.detectors:
         # Detect Z-score alerts (volume spikes)
-        zscore_alerts = detect_all_zscore_alerts(market_stats, config.zscore_threshold)
+        zscore_alerts = detect_all_zscore_alerts(
+            market_stats,
+            config.zscore_threshold,
+            cooldown_manager=cooldown_manager,
+            token_mapping=token_mapping,
+        )
         if zscore_alerts:
             logger.info(f"Detected {len(zscore_alerts)} Z-score alert(s)")
             await send_all_zscore_alerts(zscore_alerts, config)
@@ -169,7 +203,12 @@ async def run_clob_poll_cycle(
     # Check if mad detector is enabled
     if "mad" in config.detectors:
         # Detect MAD alerts (price anomalies)
-        mad_alerts = detect_all_mad_alerts(market_stats, config.mad_multiplier)
+        mad_alerts = detect_all_mad_alerts(
+            market_stats,
+            config.mad_multiplier,
+            cooldown_manager=cooldown_manager,
+            token_mapping=token_mapping,
+        )
         if mad_alerts:
             logger.info(f"Detected {len(mad_alerts)} MAD alert(s)")
             await send_all_mad_alerts(mad_alerts, config)
@@ -243,11 +282,26 @@ async def main_async() -> int:
     # Initialize CLOB market statistics dict
     market_stats: dict[str, MarketStatistics] = {}
 
+    # Initialize cooldown manager for alert suppression
+    cooldown_manager = CooldownManager(
+        cooldown_minutes=config.cooldown_minutes,
+        escalation_threshold=config.escalation_threshold,
+    )
+    if config.cooldown_minutes > 0:
+        logger.info(
+            f"Alert cooldown enabled: {config.cooldown_minutes} minutes, "
+            f"escalation threshold={config.escalation_threshold}"
+        )
+    else:
+        logger.info("Alert cooldown disabled (cooldown_minutes=0)")
+
     # Main polling loop
     async with httpx.AsyncClient() as client:
         while not shutdown_requested:
             try:
-                events = await run_poll_cycle(client, events, market_stats, config)
+                events = await run_poll_cycle(
+                    client, events, market_stats, config, cooldown_manager
+                )
             except Exception as e:
                 logger.error(f"Error in poll cycle: {e}")
 

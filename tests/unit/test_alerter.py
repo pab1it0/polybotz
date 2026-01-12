@@ -619,7 +619,8 @@ class TestFormatZScoreAlert:
     def test_format_zscore_alert_markdown(self, zscore_alert):
         """Test message uses Markdown formatting."""
         message = format_zscore_alert(zscore_alert)
-        assert "*Market*:" in message
+        # Without event_name, uses *Token*: format
+        assert "*Token*:" in message
         assert "*Z-Score*:" in message
 
 
@@ -676,7 +677,8 @@ class TestFormatMADAlert:
     def test_format_mad_alert_markdown(self, mad_alert):
         """Test message uses Markdown formatting."""
         message = format_mad_alert(mad_alert)
-        assert "*Market*:" in message
+        # Without event_name, uses *Token*: format
+        assert "*Token*:" in message
         assert "*Deviation*:" in message
 
 
