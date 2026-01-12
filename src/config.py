@@ -58,35 +58,87 @@ def _process_yaml_values(data: dict) -> dict:
     return result
 
 
-def load_config(config_path: str | Path) -> Configuration:
-    """Load configuration from YAML file with environment variable substitution."""
-    config_path = Path(config_path)
+def load_config_from_env() -> Configuration:
+    """Load configuration entirely from environment variables.
 
-    if not config_path.exists():
-        raise ConfigurationError(f"Configuration file not found: {config_path}")
+    Environment variables:
+        POLYBOTZ_SLUGS: Comma-separated list of event slugs (required)
+        POLYBOTZ_POLL_INTERVAL: Seconds between polls (default: 60)
+        POLYBOTZ_SPIKE_THRESHOLD: Percentage for spike alerts (default: 5.0)
+        POLYBOTZ_LVR_THRESHOLD: LVR threshold for warnings (default: 8.0)
+        TELEGRAM_BOT_TOKEN: Telegram bot API token (required)
+        TELEGRAM_CHAT_ID: Telegram chat ID (required)
+    """
+    slugs_str = os.environ.get("POLYBOTZ_SLUGS", "")
+    slugs = [s.strip() for s in slugs_str.split(",") if s.strip()]
 
-    with open(config_path) as f:
-        raw_data = yaml.safe_load(f)
+    try:
+        poll_interval = int(os.environ.get("POLYBOTZ_POLL_INTERVAL", "60"))
+    except ValueError:
+        poll_interval = 60
 
-    if raw_data is None:
-        raise ConfigurationError("Configuration file is empty")
+    try:
+        spike_threshold = float(os.environ.get("POLYBOTZ_SPIKE_THRESHOLD", "5.0"))
+    except ValueError:
+        spike_threshold = 5.0
 
-    data = _process_yaml_values(raw_data)
-
-    # Extract telegram config
-    telegram = data.get("telegram", {})
+    try:
+        lvr_threshold = float(os.environ.get("POLYBOTZ_LVR_THRESHOLD", "8.0"))
+    except ValueError:
+        lvr_threshold = 8.0
 
     config = Configuration(
-        slugs=data.get("slugs", []),
-        poll_interval=data.get("poll_interval", 60),
-        spike_threshold=data.get("spike_threshold", 5.0),
-        telegram_bot_token=telegram.get("bot_token", ""),
-        telegram_chat_id=telegram.get("chat_id", ""),
-        lvr_threshold=data.get("lvr_threshold", 8.0),
+        slugs=slugs,
+        poll_interval=poll_interval,
+        spike_threshold=spike_threshold,
+        telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
+        lvr_threshold=lvr_threshold,
     )
 
     validate_config(config)
     return config
+
+
+def load_config(config_path: str | Path | None = None) -> Configuration:
+    """Load configuration from YAML file or environment variables.
+
+    If config_path is provided and exists, load from YAML file.
+    Otherwise, fall back to environment variables.
+    """
+    # If no path provided, check for default config.yaml
+    if config_path is None:
+        config_path = Path("config.yaml")
+    else:
+        config_path = Path(config_path)
+
+    # If config file exists, load from it
+    if config_path.exists():
+        with open(config_path) as f:
+            raw_data = yaml.safe_load(f)
+
+        if raw_data is None:
+            raise ConfigurationError("Configuration file is empty")
+
+        data = _process_yaml_values(raw_data)
+
+        # Extract telegram config
+        telegram = data.get("telegram", {})
+
+        config = Configuration(
+            slugs=data.get("slugs", []),
+            poll_interval=data.get("poll_interval", 60),
+            spike_threshold=data.get("spike_threshold", 5.0),
+            telegram_bot_token=telegram.get("bot_token", ""),
+            telegram_chat_id=telegram.get("chat_id", ""),
+            lvr_threshold=data.get("lvr_threshold", 8.0),
+        )
+
+        validate_config(config)
+        return config
+
+    # No config file - try environment variables
+    return load_config_from_env()
 
 
 def validate_config(config: Configuration) -> None:

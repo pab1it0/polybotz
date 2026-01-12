@@ -78,11 +78,14 @@ async def main_async() -> int:
 
     logger.info("Polybotz starting...")
 
-    # Load configuration
+    # Load configuration (from file if exists, otherwise from environment variables)
     config_path = Path("config.yaml")
     try:
         config = load_config(config_path)
-        logger.info(f"Loaded configuration from {config_path}")
+        if config_path.exists():
+            logger.info(f"Loaded configuration from {config_path}")
+        else:
+            logger.info("Loaded configuration from environment variables")
     except ConfigurationError as e:
         logger.error(f"Configuration error: {e}")
         return 1
