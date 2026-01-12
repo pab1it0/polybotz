@@ -9,6 +9,8 @@ A Python bot that periodically monitors Polymarket's market events, detects anom
 - LVR (Liquidity-to-Volume Ratio) analysis for liquidity imbalance detection
 - Liquidity warnings when price spikes coincide with high LVR
 - Health classification (Healthy/Elevated/High Risk) based on LVR levels
+- **Z-Score/MAD statistical detection** via CLOB API for volume spikes and price anomalies
+- **Closed event detection** with automatic removal from monitoring
 - Send alerts via Telegram
 - Graceful error handling and retry logic
 - Configurable polling interval
@@ -48,6 +50,8 @@ slugs:
 poll_interval: 60
 spike_threshold: 5.0
 lvr_threshold: 8.0
+zscore_threshold: 3.5
+mad_multiplier: 3.0
 
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"
@@ -62,6 +66,9 @@ telegram:
 | `poll_interval` | 60 | Seconds between API polls (minimum: 10) |
 | `spike_threshold` | 5.0 | Percentage change to trigger spike alert |
 | `lvr_threshold` | 8.0 | LVR threshold for liquidity warnings |
+| `zscore_threshold` | 3.5 | Z-score threshold for volume spike alerts |
+| `mad_multiplier` | 3.0 | MAD multiplier for price anomaly alerts |
+| `clob_token_ids` | - | Optional: Override CLOB token IDs (auto-detected from events) |
 
 3. Set environment variables for Telegram:
 ```bash
@@ -112,6 +119,53 @@ A **Liquidity Warning** is triggered when both conditions are met:
 
 This helps identify price movements that may be driven by low liquidity rather than genuine market sentiment.
 
+## Z-Score/MAD Statistical Detection
+
+The bot uses the [Polymarket CLOB API](https://clob.polymarket.com) to fetch real-time order book data and applies statistical methods to detect anomalies.
+
+### How It Works
+
+1. **Rolling Windows**: Maintains 1-hour and 4-hour rolling windows of price and volume data
+2. **MAD Calculation**: Uses Median Absolute Deviation for robust outlier detection
+3. **Z-Score**: Calculates MAD-based Z-scores using the scaling constant 1.4826
+
+### Alert Types
+
+**Z-Score Alert** (Volume Spikes)
+- Triggers when volume Z-score exceeds `zscore_threshold`
+- Detects unusual trading activity
+
+**MAD Alert** (Price Anomalies)
+- Triggers when price deviation exceeds `mad_multiplier × MAD`
+- Detects abnormal price movements
+
+### Warm-up Period
+
+The statistical detection requires a minimum of 30 observations before triggering alerts. During warm-up, the bot logs progress:
+```
+CLOB warm-up: 15/2 markets have sufficient data (need 30 observations)
+```
+
+## Closed Event Detection
+
+The bot automatically detects when markets transition from open to closed:
+
+- **One-time alert**: Sends a Telegram notification when a market closes
+- **Auto-removal**: Removes fully-closed events from monitoring to save API calls
+- **Final price**: Includes the resolved price in the alert
+
+### Alert Format
+
+```
+✅ Market Closed
+
+Event: Example Event Name
+Market: Will this happen?
+Outcome: Yes
+Final Price: 0.9500
+Time: 2024-01-15 12:30:00 UTC
+```
+
 ## Finding Event Slugs
 
 1. Go to [Polymarket](https://polymarket.com)
@@ -149,6 +203,8 @@ docker run -d \
   -e POLYBOTZ_POLL_INTERVAL="60" \
   -e POLYBOTZ_SPIKE_THRESHOLD="5.0" \
   -e POLYBOTZ_LVR_THRESHOLD="8.0" \
+  -e POLYBOTZ_ZSCORE_THRESHOLD="3.5" \
+  -e POLYBOTZ_MAD_MULTIPLIER="3.0" \
   ghcr.io/pab1it0/polybotz:latest
 ```
 
@@ -183,6 +239,8 @@ The container supports two configuration modes:
 | `POLYBOTZ_POLL_INTERVAL` | No | 60 | Seconds between polls |
 | `POLYBOTZ_SPIKE_THRESHOLD` | No | 5.0 | Percentage for spike alerts |
 | `POLYBOTZ_LVR_THRESHOLD` | No | 8.0 | LVR threshold for warnings |
+| `POLYBOTZ_ZSCORE_THRESHOLD` | No | 3.5 | Z-score threshold for volume alerts |
+| `POLYBOTZ_MAD_MULTIPLIER` | No | 3.0 | MAD multiplier for price alerts |
 
 *Required only when not using a config file
 
