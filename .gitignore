@@ -58,3 +58,10 @@ config.yaml
 # uv
 .uv/
 uv.lock
+
+# Specs (auto-generated planning artifacts)
+specs/
+.specify/
+
+# Claude Code
+.claude/
