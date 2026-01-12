@@ -1,7 +1,11 @@
 """Data models for Polybotz."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .statistics import RollingWindow
 
 
 @dataclass
@@ -17,6 +21,7 @@ class MonitoredMarket:
     volume_24h: float | None = None
     liquidity: float | None = None
     lvr: float | None = None
+    clob_token_id: str | None = None  # CLOB token ID for this outcome
 
 
 @dataclass
@@ -58,4 +63,59 @@ class LiquidityWarning:
     health_status: str  # "Healthy", "Elevated", or "High Risk"
     volume_24h: float
     liquidity: float
+    detected_at: datetime
+
+
+@dataclass
+class MarketStatistics:
+    """Rolling statistics for a single market tracked via CLOB API."""
+
+    market_id: str
+    volume_1h: "RollingWindow" = field(default=None)  # type: ignore
+    volume_4h: "RollingWindow" = field(default=None)  # type: ignore
+    price_1h: "RollingWindow" = field(default=None)  # type: ignore
+    price_4h: "RollingWindow" = field(default=None)  # type: ignore
+    last_updated: datetime | None = None
+
+    def __post_init__(self):
+        """Initialize rolling windows if not provided."""
+        from .statistics import RollingWindow
+
+        if self.volume_1h is None:
+            self.volume_1h = RollingWindow(duration=timedelta(hours=1))
+        if self.volume_4h is None:
+            self.volume_4h = RollingWindow(duration=timedelta(hours=4))
+        if self.price_1h is None:
+            self.price_1h = RollingWindow(duration=timedelta(hours=1))
+        if self.price_4h is None:
+            self.price_4h = RollingWindow(duration=timedelta(hours=4))
+
+
+@dataclass
+class ZScoreAlert:
+    """Alert triggered when Z-score exceeds threshold."""
+
+    market_id: str
+    metric: str  # "volume" or "price"
+    window: str  # "1h" or "4h"
+    current_value: float
+    median: float
+    mad: float
+    zscore: float
+    threshold: float
+    detected_at: datetime
+
+
+@dataclass
+class MADAlert:
+    """Alert triggered when value exceeds MAD multiplier."""
+
+    market_id: str
+    metric: str  # "volume" or "price"
+    window: str  # "1h" or "4h"
+    current_value: float
+    median: float
+    mad: float
+    multiplier: float
+    threshold_multiplier: float
     detected_at: datetime

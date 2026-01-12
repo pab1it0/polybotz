@@ -11,9 +11,142 @@ from src.main import (
     run_poll_cycle,
     main_async,
     main,
+    extract_clob_token_ids,
 )
 from src.models import MonitoredEvent, MonitoredMarket
 from src.config import Configuration
+
+
+class TestExtractClobTokenIds:
+    """Tests for extract_clob_token_ids function."""
+
+    def test_extract_from_events(self):
+        """Test extracting CLOB token IDs from events."""
+        events = {
+            "event-1": MonitoredEvent(
+                slug="event-1",
+                name="Event 1",
+                markets=[
+                    MonitoredMarket(
+                        id="m1",
+                        question="Q1",
+                        outcome="Yes",
+                        clob_token_id="token-1-yes",
+                        is_closed=False,
+                    ),
+                    MonitoredMarket(
+                        id="m1",
+                        question="Q1",
+                        outcome="No",
+                        clob_token_id="token-1-no",
+                        is_closed=False,
+                    ),
+                ],
+            ),
+        }
+
+        result = extract_clob_token_ids(events)
+
+        assert len(result) == 2
+        assert "token-1-yes" in result
+        assert "token-1-no" in result
+
+    def test_extract_excludes_closed_markets(self):
+        """Test that closed markets are excluded."""
+        events = {
+            "event-1": MonitoredEvent(
+                slug="event-1",
+                name="Event 1",
+                markets=[
+                    MonitoredMarket(
+                        id="m1",
+                        question="Q1",
+                        outcome="Yes",
+                        clob_token_id="token-1-yes",
+                        is_closed=False,
+                    ),
+                    MonitoredMarket(
+                        id="m1",
+                        question="Q1",
+                        outcome="No",
+                        clob_token_id="token-1-no",
+                        is_closed=True,  # Closed
+                    ),
+                ],
+            ),
+        }
+
+        result = extract_clob_token_ids(events)
+
+        assert len(result) == 1
+        assert "token-1-yes" in result
+        assert "token-1-no" not in result
+
+    def test_extract_excludes_none_token_ids(self):
+        """Test that markets without token IDs are excluded."""
+        events = {
+            "event-1": MonitoredEvent(
+                slug="event-1",
+                name="Event 1",
+                markets=[
+                    MonitoredMarket(
+                        id="m1",
+                        question="Q1",
+                        outcome="Yes",
+                        clob_token_id="token-1-yes",
+                        is_closed=False,
+                    ),
+                    MonitoredMarket(
+                        id="m1",
+                        question="Q1",
+                        outcome="No",
+                        clob_token_id=None,  # No token ID
+                        is_closed=False,
+                    ),
+                ],
+            ),
+        }
+
+        result = extract_clob_token_ids(events)
+
+        assert len(result) == 1
+        assert "token-1-yes" in result
+
+    def test_extract_empty_events(self):
+        """Test extraction from empty events dict."""
+        result = extract_clob_token_ids({})
+        assert result == []
+
+    def test_extract_multiple_events(self):
+        """Test extraction from multiple events."""
+        events = {
+            "event-1": MonitoredEvent(
+                slug="event-1",
+                name="Event 1",
+                markets=[
+                    MonitoredMarket(
+                        id="m1", question="Q1", outcome="Yes",
+                        clob_token_id="token-1", is_closed=False,
+                    ),
+                ],
+            ),
+            "event-2": MonitoredEvent(
+                slug="event-2",
+                name="Event 2",
+                markets=[
+                    MonitoredMarket(
+                        id="m2", question="Q2", outcome="Yes",
+                        clob_token_id="token-2", is_closed=False,
+                    ),
+                ],
+            ),
+        }
+
+        result = extract_clob_token_ids(events)
+
+        assert len(result) == 2
+        assert "token-1" in result
+        assert "token-2" in result
 
 
 class TestHandleShutdown:
@@ -61,6 +194,7 @@ class TestRunPollCycle:
             ],
         )
         events = {"test-slug": initial_event}
+        market_stats = {}  # Empty CLOB stats
 
         mock_client = AsyncMock()
         mock_response = MagicMock()
@@ -68,7 +202,7 @@ class TestRunPollCycle:
         mock_response.json.return_value = gamma_api_response
         mock_client.get.return_value = mock_response
 
-        result = await run_poll_cycle(mock_client, events, valid_config)
+        result = await run_poll_cycle(mock_client, events, market_stats, valid_config)
 
         assert "test-slug" in result
 
@@ -90,6 +224,7 @@ class TestRunPollCycle:
             ],
         )
         events = {"test-slug": initial_event}
+        market_stats = {}  # Empty CLOB stats
 
         mock_client = AsyncMock()
         mock_response = MagicMock()
@@ -105,7 +240,7 @@ class TestRunPollCycle:
             alert_mock.post.return_value = alert_response
             mock_alert_client.return_value.__aenter__.return_value = alert_mock
 
-            result = await run_poll_cycle(mock_client, events, valid_config)
+            result = await run_poll_cycle(mock_client, events, market_stats, valid_config)
 
             assert "test-slug" in result
 
@@ -116,6 +251,7 @@ class TestRunPollCycle:
             "slug1": MonitoredEvent(slug="slug1", name="Event 1", markets=[]),
             "slug2": MonitoredEvent(slug="slug2", name="Event 2", markets=[]),
         }
+        market_stats = {}  # Empty CLOB stats
 
         mock_client = AsyncMock()
         mock_response = MagicMock()
@@ -124,7 +260,7 @@ class TestRunPollCycle:
         mock_client.get.return_value = mock_response
 
         with caplog.at_level("INFO"):
-            await run_poll_cycle(mock_client, events, valid_config)
+            await run_poll_cycle(mock_client, events, market_stats, valid_config)
 
         assert "Starting poll cycle for 2 events" in caplog.text
         assert "Poll cycle completed" in caplog.text

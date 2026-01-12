@@ -56,7 +56,12 @@ ENV PATH="/app/.venv/bin:$PATH"
 #     -e POLYBOTZ_POLL_INTERVAL="60" \
 #     -e POLYBOTZ_SPIKE_THRESHOLD="5.0" \
 #     -e POLYBOTZ_LVR_THRESHOLD="8.0" \
+#     -e POLYBOTZ_ZSCORE_THRESHOLD="3.5" \
+#     -e POLYBOTZ_MAD_MULTIPLIER="3.0" \
 #     ghcr.io/pab1it0/polybotz:latest
+#
+# Note: CLOB token IDs are auto-extracted from monitored events.
+# To override, set POLYBOTZ_CLOB_TOKEN_IDS="token1,token2"
 
 # Run the application
 CMD ["python", "-m", "src"]

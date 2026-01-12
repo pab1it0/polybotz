@@ -99,6 +99,7 @@ def parse_event_response(data: dict) -> MonitoredEvent:
         # Handle outcomes and prices that may be JSON strings
         outcomes = _parse_json_field(market_data.get("outcomes", []))
         prices = _parse_json_field(market_data.get("outcomePrices", []))
+        clob_token_ids = _parse_json_field(market_data.get("clobTokenIds", []))
 
         # Parse volume and liquidity at market level
         volume_24h = None
@@ -123,6 +124,11 @@ def parse_event_response(data: dict) -> MonitoredEvent:
                 except (ValueError, TypeError):
                     price = None
 
+            # Get CLOB token ID for this outcome (if available)
+            clob_token_id = None
+            if i < len(clob_token_ids):
+                clob_token_id = str(clob_token_ids[i]) if clob_token_ids[i] else None
+
             market = MonitoredMarket(
                 id=market_data.get("conditionId", market_data.get("id", "")),
                 question=market_data.get("question", ""),
@@ -132,6 +138,7 @@ def parse_event_response(data: dict) -> MonitoredEvent:
                 is_closed=market_data.get("closed", False),
                 volume_24h=volume_24h,
                 liquidity=liquidity,
+                clob_token_id=clob_token_id,
             )
             markets.append(market)
 

@@ -1,10 +1,18 @@
 """Tests for src/detector.py."""
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from src.models import LiquidityWarning, MonitoredEvent, MonitoredMarket, SpikeAlert
+from src.models import (
+    LiquidityWarning,
+    MarketStatistics,
+    MonitoredEvent,
+    MonitoredMarket,
+    SpikeAlert,
+    ZScoreAlert,
+    MADAlert,
+)
 from src.detector import (
     calculate_lvr,
     classify_lvr_health,
@@ -12,6 +20,10 @@ from src.detector import (
     detect_all_spikes,
     detect_liquidity_warning,
     detect_spike,
+    detect_zscore_alert,
+    detect_mad_alert,
+    detect_all_zscore_alerts,
+    detect_all_mad_alerts,
 )
 
 
@@ -709,3 +721,170 @@ class TestDetectAllLiquidityWarnings:
             detect_all_liquidity_warnings([event], [spike], lvr_threshold=8.0)
 
         assert "Total liquidity warnings" in caplog.text
+
+
+class TestDetectZScoreAlert:
+    """Tests for detect_zscore_alert function (T028)."""
+
+    def test_detect_zscore_alert_triggers(self):
+        """Test Z-score alert triggers when threshold exceeded."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add enough observations to make window valid (min 30)
+        for i in range(35):
+            stats.volume_1h.add(100.0 + i * 0.1, now)
+
+        # Add a spike value
+        stats.volume_1h.add(500.0, now)
+
+        alert = detect_zscore_alert(stats, threshold=3.5, metric="volume", window="1h")
+
+        assert alert is not None
+        assert alert.market_id == "test-market"
+        assert alert.metric == "volume"
+        assert alert.window == "1h"
+        assert alert.zscore > 3.5
+
+    def test_no_alert_below_threshold(self):
+        """Test no alert when Z-score is below threshold (T030)."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add observations that are all similar (low variance)
+        for i in range(35):
+            stats.volume_1h.add(100.0 + i * 0.1, now)
+
+        # Add a value only slightly higher (low z-score)
+        stats.volume_1h.add(105.0, now)
+
+        alert = detect_zscore_alert(stats, threshold=3.5, metric="volume", window="1h")
+
+        assert alert is None
+
+    def test_no_alert_insufficient_data(self):
+        """Test no alert when insufficient observations (T031)."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add fewer than min_observations (30)
+        for i in range(10):
+            stats.volume_1h.add(100.0, now)
+
+        # Even a spike should not trigger without enough data
+        stats.volume_1h.add(1000.0, now)
+
+        alert = detect_zscore_alert(stats, threshold=3.5, metric="volume", window="1h")
+
+        assert alert is None
+
+
+class TestDetectMADAlert:
+    """Tests for detect_mad_alert function (T029)."""
+
+    def test_detect_mad_alert_triggers(self):
+        """Test MAD alert triggers when value exceeds multiplier."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add observations: values around 100 with MAD ~= 1
+        for i in range(35):
+            stats.price_1h.add(100.0 + (i % 5) - 2, now)  # Values 98-102
+
+        # Add a spike value far from median
+        stats.price_1h.add(120.0, now)  # ~20 above median
+
+        alert = detect_mad_alert(stats, multiplier=3.0, metric="price", window="1h")
+
+        assert alert is not None
+        assert alert.market_id == "test-market"
+        assert alert.metric == "price"
+        assert alert.window == "1h"
+        assert alert.multiplier > 3.0
+
+    def test_no_mad_alert_below_multiplier(self):
+        """Test no MAD alert when value is within normal range."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add observations with consistent values
+        for i in range(35):
+            stats.price_1h.add(100.0 + (i % 5) - 2, now)
+
+        # Add a value only slightly higher
+        stats.price_1h.add(103.0, now)
+
+        alert = detect_mad_alert(stats, multiplier=3.0, metric="price", window="1h")
+
+        assert alert is None
+
+    def test_no_mad_alert_insufficient_data(self):
+        """Test no MAD alert when insufficient observations."""
+        stats = MarketStatistics(market_id="test-market")
+        now = datetime.now()
+
+        # Add fewer than min_observations
+        for i in range(10):
+            stats.price_1h.add(100.0, now)
+
+        stats.price_1h.add(200.0, now)
+
+        alert = detect_mad_alert(stats, multiplier=3.0, metric="price", window="1h")
+
+        assert alert is None
+
+
+class TestDetectAllZScoreAlerts:
+    """Tests for detect_all_zscore_alerts function (T034)."""
+
+    def test_detect_all_zscore_alerts_multiple_markets(self):
+        """Test detecting Z-score alerts across multiple markets."""
+        now = datetime.now()
+
+        stats1 = MarketStatistics(market_id="market1")
+        stats2 = MarketStatistics(market_id="market2")
+
+        # Populate both with valid data (with some variance to get non-zero MAD)
+        for i in range(35):
+            stats1.volume_1h.add(100.0 + (i % 5), now)  # Values 100-104
+            stats2.volume_1h.add(100.0 + (i % 5), now)  # Values 100-104
+
+        # Add spike to market1 only
+        stats1.volume_1h.add(500.0, now)
+        stats2.volume_1h.add(101.0, now)
+
+        stats_dict = {"market1": stats1, "market2": stats2}
+
+        alerts = detect_all_zscore_alerts(stats_dict, threshold=3.5)
+
+        # Only market1 should have an alert
+        market_ids = [a.market_id for a in alerts]
+        assert "market1" in market_ids
+
+
+class TestDetectAllMADAlerts:
+    """Tests for detect_all_mad_alerts function (T035)."""
+
+    def test_detect_all_mad_alerts_multiple_markets(self):
+        """Test detecting MAD alerts across multiple markets."""
+        now = datetime.now()
+
+        stats1 = MarketStatistics(market_id="market1")
+        stats2 = MarketStatistics(market_id="market2")
+
+        # Populate both with valid data
+        for i in range(35):
+            stats1.price_1h.add(100.0 + (i % 3), now)
+            stats2.price_1h.add(100.0 + (i % 3), now)
+
+        # Add spike to market1 only
+        stats1.price_1h.add(200.0, now)
+        stats2.price_1h.add(101.0, now)
+
+        stats_dict = {"market1": stats1, "market2": stats2}
+
+        alerts = detect_all_mad_alerts(stats_dict, multiplier=3.0)
+
+        # Only market1 should have an alert
+        market_ids = [a.market_id for a in alerts]
+        assert "market1" in market_ids
