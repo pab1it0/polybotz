@@ -161,3 +161,95 @@ class TestRollingWindow:
         """Test mad returns None for empty window."""
         window = RollingWindow(duration=timedelta(hours=1))
         assert window.mad is None
+
+    def test_rolling_window_add_default_timestamp(self):
+        """Test adding observation with default timestamp."""
+        window = RollingWindow(duration=timedelta(hours=1))
+
+        # Add without explicit timestamp - should use datetime.now()
+        window.add(42.0)
+
+        assert len(window.observations) == 1
+        assert window.observations[0].value == 42.0
+        # Timestamp should be close to now
+        assert (datetime.now() - window.observations[0].timestamp).total_seconds() < 1
+
+
+class TestUpdateMarketStatistics:
+    """Tests for update_market_statistics function."""
+
+    def test_update_market_statistics(self):
+        """Test updating all rolling windows in a MarketStatistics instance."""
+        from src.models import MarketStatistics
+
+        stats = MarketStatistics(market_id="test_market")
+        timestamp = datetime.now()
+
+        update_market_statistics(stats, price=0.65, volume=1000.0, timestamp=timestamp)
+
+        # Check all windows were updated
+        assert len(stats.volume_1h.observations) == 1
+        assert len(stats.volume_4h.observations) == 1
+        assert len(stats.price_1h.observations) == 1
+        assert len(stats.price_4h.observations) == 1
+
+        # Check values
+        assert stats.volume_1h.observations[0].value == 1000.0
+        assert stats.price_1h.observations[0].value == 0.65
+        assert stats.last_updated == timestamp
+
+    def test_update_market_statistics_default_timestamp(self):
+        """Test updating with default timestamp."""
+        from src.models import MarketStatistics
+
+        stats = MarketStatistics(market_id="test_market")
+
+        update_market_statistics(stats, price=0.5, volume=500.0)
+
+        assert stats.last_updated is not None
+        assert (datetime.now() - stats.last_updated).total_seconds() < 1
+
+
+class TestGetStatisticsSummary:
+    """Tests for get_statistics_summary function."""
+
+    def test_get_statistics_summary(self):
+        """Test getting formatted statistics summary."""
+        from src.models import MarketStatistics
+
+        stats = MarketStatistics(market_id="test_market_123")
+        timestamp = datetime.now()
+
+        # Add some observations to make windows valid
+        for i in range(35):
+            update_market_statistics(stats, price=0.5 + i * 0.01, volume=1000.0 + i * 10, timestamp=timestamp)
+
+        summary = get_statistics_summary(stats)
+
+        assert summary["market_id"] == "test_market_123"
+        assert summary["last_updated"] is not None
+        assert "volume_1h" in summary
+        assert "volume_4h" in summary
+        assert "price_1h" in summary
+        assert "price_4h" in summary
+
+        # Check volume_1h details
+        assert summary["volume_1h"]["observations"] == 35
+        assert summary["volume_1h"]["is_valid"] is True
+        assert summary["volume_1h"]["median"] is not None
+        assert summary["volume_1h"]["mad"] is not None
+
+    def test_get_statistics_summary_empty(self):
+        """Test getting summary for empty statistics."""
+        from src.models import MarketStatistics
+
+        stats = MarketStatistics(market_id="empty_market")
+
+        summary = get_statistics_summary(stats)
+
+        assert summary["market_id"] == "empty_market"
+        assert summary["last_updated"] is None
+        assert summary["volume_1h"]["observations"] == 0
+        assert summary["volume_1h"]["is_valid"] is False
+        assert summary["volume_1h"]["median"] is None
+        assert summary["volume_1h"]["mad"] is None

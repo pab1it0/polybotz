@@ -5,15 +5,19 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
-from src.models import LiquidityWarning, SpikeAlert
+from src.models import LiquidityWarning, MADAlert, SpikeAlert, ZScoreAlert
 from src.config import Configuration
 from src.alerter import (
     format_alert_message,
     format_liquidity_warning_message,
+    format_mad_alert,
+    format_zscore_alert,
     _escape_markdown,
     send_telegram_alert,
     send_all_alerts,
     send_all_liquidity_warnings,
+    send_all_mad_alerts,
+    send_all_zscore_alerts,
     TELEGRAM_API_BASE,
 )
 
@@ -551,3 +555,272 @@ class TestSendAllLiquidityWarnings:
             await send_all_liquidity_warnings([], valid_config)
 
         assert "liquidity warnings" not in caplog.text
+
+
+class TestFormatZScoreAlert:
+    """Tests for format_zscore_alert function."""
+
+    @pytest.fixture
+    def zscore_alert(self):
+        """Create a sample Z-score alert."""
+        return ZScoreAlert(
+            market_id="0x123abc",
+            metric="volume",
+            window="1h",
+            current_value=1500.0,
+            median=500.0,
+            mad=100.0,
+            zscore=6.75,
+            threshold=3.5,
+            detected_at=datetime(2024, 1, 15, 12, 30, 0),
+        )
+
+    def test_format_zscore_alert_contains_market(self, zscore_alert):
+        """Test message contains market ID."""
+        message = format_zscore_alert(zscore_alert)
+        assert "0x123abc" in message
+
+    def test_format_zscore_alert_contains_metric(self, zscore_alert):
+        """Test message contains metric and window."""
+        message = format_zscore_alert(zscore_alert)
+        assert "volume" in message
+        assert "1h" in message
+
+    def test_format_zscore_alert_contains_zscore(self, zscore_alert):
+        """Test message contains Z-score value."""
+        message = format_zscore_alert(zscore_alert)
+        assert "+6.75" in message
+
+    def test_format_zscore_alert_spike_direction(self, zscore_alert):
+        """Test message shows spike for positive Z-score."""
+        message = format_zscore_alert(zscore_alert)
+        assert "spike" in message
+
+    def test_format_zscore_alert_drop_direction(self, zscore_alert):
+        """Test message shows drop for negative Z-score."""
+        zscore_alert.zscore = -4.5
+        message = format_zscore_alert(zscore_alert)
+        assert "drop" in message
+
+    def test_format_zscore_alert_contains_threshold(self, zscore_alert):
+        """Test message contains threshold."""
+        message = format_zscore_alert(zscore_alert)
+        assert "3.5" in message
+
+    def test_format_zscore_alert_contains_statistics(self, zscore_alert):
+        """Test message contains statistical values."""
+        message = format_zscore_alert(zscore_alert)
+        assert "1500" in message  # current
+        assert "500" in message  # median
+        assert "100" in message  # MAD
+
+    def test_format_zscore_alert_markdown(self, zscore_alert):
+        """Test message uses Markdown formatting."""
+        message = format_zscore_alert(zscore_alert)
+        assert "*Market*:" in message
+        assert "*Z-Score*:" in message
+
+
+class TestFormatMADAlert:
+    """Tests for format_mad_alert function."""
+
+    @pytest.fixture
+    def mad_alert(self):
+        """Create a sample MAD alert."""
+        return MADAlert(
+            market_id="0x456def",
+            metric="price",
+            window="4h",
+            current_value=0.85,
+            median=0.50,
+            mad=0.05,
+            multiplier=7.0,
+            threshold_multiplier=3.0,
+            detected_at=datetime(2024, 1, 15, 14, 45, 0),
+        )
+
+    def test_format_mad_alert_contains_market(self, mad_alert):
+        """Test message contains market ID."""
+        message = format_mad_alert(mad_alert)
+        assert "0x456def" in message
+
+    def test_format_mad_alert_contains_metric(self, mad_alert):
+        """Test message contains metric and window."""
+        message = format_mad_alert(mad_alert)
+        assert "price" in message
+        assert "4h" in message
+
+    def test_format_mad_alert_contains_multiplier(self, mad_alert):
+        """Test message contains MAD multiplier."""
+        message = format_mad_alert(mad_alert)
+        assert "7.0x MAD" in message
+
+    def test_format_mad_alert_above_direction(self, mad_alert):
+        """Test message shows above for price above median."""
+        message = format_mad_alert(mad_alert)
+        assert "above" in message
+
+    def test_format_mad_alert_below_direction(self, mad_alert):
+        """Test message shows below for price below median."""
+        mad_alert.current_value = 0.15
+        message = format_mad_alert(mad_alert)
+        assert "below" in message
+
+    def test_format_mad_alert_contains_threshold(self, mad_alert):
+        """Test message contains threshold."""
+        message = format_mad_alert(mad_alert)
+        assert "3.0x MAD" in message
+
+    def test_format_mad_alert_markdown(self, mad_alert):
+        """Test message uses Markdown formatting."""
+        message = format_mad_alert(mad_alert)
+        assert "*Market*:" in message
+        assert "*Deviation*:" in message
+
+
+class TestSendAllZScoreAlerts:
+    """Tests for send_all_zscore_alerts function."""
+
+    @pytest.fixture
+    def zscore_alert(self):
+        """Create a sample Z-score alert."""
+        return ZScoreAlert(
+            market_id="0x123abc",
+            metric="volume",
+            window="1h",
+            current_value=1500.0,
+            median=500.0,
+            mad=100.0,
+            zscore=6.75,
+            threshold=3.5,
+            detected_at=datetime(2024, 1, 15, 12, 30, 0),
+        )
+
+    @pytest.mark.asyncio
+    async def test_send_zscore_alerts_success(self, valid_config, zscore_alert, mock_telegram_success_response):
+        """Test sending multiple Z-score alerts successfully."""
+        alerts = [zscore_alert, zscore_alert]
+
+        with patch("src.alerter.httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_telegram_success_response
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            count = await send_all_zscore_alerts(alerts, valid_config)
+
+            assert count == 2
+            assert mock_client.post.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_send_zscore_alerts_empty_list(self, valid_config):
+        """Test sending empty Z-score alerts list."""
+        count = await send_all_zscore_alerts([], valid_config)
+        assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_send_zscore_alerts_partial_failure(self, valid_config, zscore_alert):
+        """Test sending Z-score alerts with partial failures."""
+        alerts = [zscore_alert, zscore_alert, zscore_alert]
+
+        with patch("src.alerter.httpx.AsyncClient") as mock_client_class:
+            success_response = MagicMock()
+            success_response.status_code = 200
+            success_response.json.return_value = {"ok": True}
+
+            error_response = MagicMock()
+            error_response.status_code = 500
+
+            mock_client = AsyncMock()
+            mock_client.post.side_effect = [success_response, error_response, success_response]
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            count = await send_all_zscore_alerts(alerts, valid_config)
+
+            assert count == 2
+
+    @pytest.mark.asyncio
+    async def test_send_zscore_alerts_logging(self, valid_config, zscore_alert, mock_telegram_success_response, caplog):
+        """Test logging during Z-score alert sending."""
+        with patch("src.alerter.httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_telegram_success_response
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            with caplog.at_level("INFO"):
+                await send_all_zscore_alerts([zscore_alert], valid_config)
+
+            assert "Sent 1/1 Z-score alerts" in caplog.text
+
+
+class TestSendAllMADAlerts:
+    """Tests for send_all_mad_alerts function."""
+
+    @pytest.fixture
+    def mad_alert(self):
+        """Create a sample MAD alert."""
+        return MADAlert(
+            market_id="0x456def",
+            metric="price",
+            window="4h",
+            current_value=0.85,
+            median=0.50,
+            mad=0.05,
+            multiplier=7.0,
+            threshold_multiplier=3.0,
+            detected_at=datetime(2024, 1, 15, 14, 45, 0),
+        )
+
+    @pytest.mark.asyncio
+    async def test_send_mad_alerts_success(self, valid_config, mad_alert, mock_telegram_success_response):
+        """Test sending multiple MAD alerts successfully."""
+        alerts = [mad_alert, mad_alert]
+
+        with patch("src.alerter.httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_telegram_success_response
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            count = await send_all_mad_alerts(alerts, valid_config)
+
+            assert count == 2
+            assert mock_client.post.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_send_mad_alerts_empty_list(self, valid_config):
+        """Test sending empty MAD alerts list."""
+        count = await send_all_mad_alerts([], valid_config)
+        assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_send_mad_alerts_partial_failure(self, valid_config, mad_alert):
+        """Test sending MAD alerts with partial failures."""
+        alerts = [mad_alert, mad_alert, mad_alert]
+
+        with patch("src.alerter.httpx.AsyncClient") as mock_client_class:
+            success_response = MagicMock()
+            success_response.status_code = 200
+            success_response.json.return_value = {"ok": True}
+
+            error_response = MagicMock()
+            error_response.status_code = 500
+
+            mock_client = AsyncMock()
+            mock_client.post.side_effect = [success_response, error_response, success_response]
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            count = await send_all_mad_alerts(alerts, valid_config)
+
+            assert count == 2
+
+    @pytest.mark.asyncio
+    async def test_send_mad_alerts_logging(self, valid_config, mad_alert, mock_telegram_success_response, caplog):
+        """Test logging during MAD alert sending."""
+        with patch("src.alerter.httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_telegram_success_response
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            with caplog.at_level("INFO"):
+                await send_all_mad_alerts([mad_alert], valid_config)
+
+            assert "Sent 1/1 MAD alerts" in caplog.text
