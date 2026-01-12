@@ -1,11 +1,14 @@
 # Polybotz
 
-A Python bot that periodically monitors Polymarket's market events, detects anomalous spikes, and sends real-time alerts. Uses the [Polymarket Gamma API](https://gamma-api.polymarket.com) to fetch market data.
+A Python bot that periodically monitors Polymarket's market events, detects anomalous spikes and liquidity imbalances, and sends real-time alerts. Uses the [Polymarket Gamma API](https://gamma-api.polymarket.com) to fetch market data.
 
 ## Features
 
 - Monitor multiple Polymarket events by slug
 - Detect price spikes exceeding configurable threshold
+- LVR (Liquidity-to-Volume Ratio) analysis for liquidity imbalance detection
+- Liquidity warnings when price spikes coincide with high LVR
+- Health classification (Healthy/Elevated/High Risk) based on LVR levels
 - Send alerts via Telegram
 - Graceful error handling and retry logic
 - Configurable polling interval
@@ -44,11 +47,21 @@ slugs:
 
 poll_interval: 60
 spike_threshold: 5.0
+lvr_threshold: 8.0
 
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"
   chat_id: "${TELEGRAM_CHAT_ID}"
 ```
+
+### Configuration Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `slugs` | - | List of Polymarket event slugs to monitor |
+| `poll_interval` | 60 | Seconds between API polls (minimum: 10) |
+| `spike_threshold` | 5.0 | Percentage change to trigger spike alert |
+| `lvr_threshold` | 8.0 | LVR threshold for liquidity warnings |
 
 3. Set environment variables for Telegram:
 ```bash
@@ -70,9 +83,34 @@ The bot will:
 1. Validate configured event slugs against Polymarket API
 2. Start polling at the configured interval
 3. Detect price spikes exceeding the threshold
-4. Send Telegram alerts for detected spikes
+4. Analyze LVR for liquidity imbalances on spike events
+5. Send Telegram alerts for spikes and liquidity warnings
 
 Press `Ctrl+C` to gracefully stop the bot.
+
+## LVR Liquidity Detection
+
+The bot calculates the Liquidity-to-Volume Ratio (LVR) to identify potential liquidity risks:
+
+```
+LVR = 24h Volume / Total Liquidity
+```
+
+### Health Classification
+
+| LVR Range | Status | Meaning |
+|-----------|--------|---------|
+| < 2.0 | Healthy | Normal liquidity conditions |
+| 2.0 - 10.0 | Elevated | Moderate trading pressure |
+| >= 10.0 | High Risk | Severe liquidity imbalance |
+
+### Liquidity Warnings
+
+A **Liquidity Warning** is triggered when both conditions are met:
+1. Price change exceeds `spike_threshold`
+2. LVR exceeds `lvr_threshold`
+
+This helps identify price movements that may be driven by low liquidity rather than genuine market sentiment.
 
 ## Finding Event Slugs
 
