@@ -1,11 +1,17 @@
 """Configuration loading and validation for Polybotz."""
 
+import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger("polybotz.config")
+
+# Valid detector names for configuration
+VALID_DETECTORS: set[str] = {"spike", "lvr", "zscore", "mad", "closed"}
 
 
 @dataclass
@@ -22,6 +28,7 @@ class Configuration:
     clob_token_ids: list[str] = None  # type: ignore
     zscore_threshold: float = 3.5
     mad_multiplier: float = 3.0
+    detectors: set[str] = field(default_factory=lambda: VALID_DETECTORS.copy())
 
     def __post_init__(self):
         if self.clob_token_ids is None:
@@ -46,6 +53,52 @@ def _substitute_env_vars(value: str) -> str:
         return env_value
 
     return re.sub(pattern, replacer, value)
+
+
+def parse_detectors(value: str | list[str] | None) -> set[str]:
+    """Parse detector configuration to a set of enabled detector names.
+
+    Args:
+        value: "all", "none", comma-separated string, or list of detector names
+
+    Returns:
+        Set of valid detector names to enable
+
+    Special values:
+        - None: All detectors enabled (default, backward compatible)
+        - "all": All detectors enabled
+        - "none": No detectors enabled (monitoring only mode)
+    """
+    # Default: all detectors enabled (backward compatible)
+    if value is None:
+        return VALID_DETECTORS.copy()
+
+    # Handle string values
+    if isinstance(value, str):
+        value_lower = value.strip().lower()
+
+        # Special value: enable all
+        if value_lower == "all":
+            return VALID_DETECTORS.copy()
+
+        # Special value: disable all
+        if value_lower == "none":
+            return set()
+
+        # Comma-separated list
+        names = {s.strip().lower() for s in value.split(",") if s.strip()}
+    else:
+        # List of detector names
+        names = {str(s).strip().lower() for s in value if s}
+
+    # Validate and filter
+    valid = names & VALID_DETECTORS
+    invalid = names - VALID_DETECTORS
+
+    if invalid:
+        logger.warning(f"Invalid detector names ignored: {sorted(invalid)}")
+
+    return valid
 
 
 def _process_yaml_values(data: dict) -> dict:
@@ -77,6 +130,7 @@ def load_config_from_env() -> Configuration:
         POLYBOTZ_CLOB_TOKEN_IDS: Comma-separated list of CLOB token IDs (optional)
         POLYBOTZ_ZSCORE_THRESHOLD: Z-score threshold for alerts (default: 3.5)
         POLYBOTZ_MAD_MULTIPLIER: MAD multiplier threshold (default: 3.0)
+        POLYBOTZ_DETECTORS: Detectors to enable - "all", "none", or comma-separated list (default: all)
         TELEGRAM_BOT_TOKEN: Telegram bot API token (required)
         TELEGRAM_CHAT_ID: Telegram chat ID (required)
     """
@@ -111,6 +165,10 @@ def load_config_from_env() -> Configuration:
     except ValueError:
         mad_multiplier = 3.0
 
+    # Parse detectors from env var (None means use default)
+    detectors_str = os.environ.get("POLYBOTZ_DETECTORS")
+    detectors = parse_detectors(detectors_str)
+
     config = Configuration(
         slugs=slugs,
         poll_interval=poll_interval,
@@ -121,6 +179,7 @@ def load_config_from_env() -> Configuration:
         clob_token_ids=clob_token_ids,
         zscore_threshold=zscore_threshold,
         mad_multiplier=mad_multiplier,
+        detectors=detectors,
     )
 
     validate_config(config)
@@ -132,6 +191,8 @@ def load_config(config_path: str | Path | None = None) -> Configuration:
 
     If config_path is provided and exists, load from YAML file.
     Otherwise, fall back to environment variables.
+
+    Note: POLYBOTZ_DETECTORS env var takes precedence over config file detectors setting.
     """
     # If no path provided, check for default config.yaml
     if config_path is None:
@@ -152,6 +213,14 @@ def load_config(config_path: str | Path | None = None) -> Configuration:
         # Extract telegram config
         telegram = data.get("telegram", {})
 
+        # Parse detectors configuration
+        # POLYBOTZ_DETECTORS env var takes precedence over config file
+        detectors_env = os.environ.get("POLYBOTZ_DETECTORS")
+        if detectors_env is not None:
+            detectors = parse_detectors(detectors_env)
+        else:
+            detectors = parse_detectors(data.get("detectors"))
+
         config = Configuration(
             slugs=data.get("slugs", []),
             poll_interval=data.get("poll_interval", 60),
@@ -162,6 +231,7 @@ def load_config(config_path: str | Path | None = None) -> Configuration:
             clob_token_ids=data.get("clob_token_ids", []),
             zscore_threshold=data.get("zscore_threshold", 3.5),
             mad_multiplier=data.get("mad_multiplier", 3.0),
+            detectors=detectors,
         )
 
         validate_config(config)

@@ -19,6 +19,26 @@ spike_threshold: 5.0
 # Lower values = more sensitive, Higher values = only flag severe imbalances
 lvr_threshold: 8.0
 
+# Z-score threshold for volume spike alerts via CLOB API (default: 3.5)
+zscore_threshold: 3.5
+
+# MAD multiplier for price anomaly alerts via CLOB API (default: 3.0)
+mad_multiplier: 3.0
+
+# Detectors to enable (default: all enabled)
+# Available detectors: spike, lvr, zscore, mad, closed
+# Options:
+#   - List specific detectors: [spike, lvr]
+#   - Enable all: "all"
+#   - Disable all (monitoring only): "none"
+#   - Omit field entirely to enable all (backward compatible)
+detectors:
+  - spike   # Price spike detection
+  - lvr     # Liquidity-to-Volume Ratio analysis
+  - zscore  # Z-score volume anomaly detection (CLOB API)
+  - mad     # Median Absolute Deviation price anomaly (CLOB API)
+  - closed  # Closed market detection
+
 # Telegram configuration
 telegram:
   # Bot token from @BotFather

@@ -69,6 +69,7 @@ telegram:
 | `zscore_threshold` | 3.5 | Z-score threshold for volume spike alerts |
 | `mad_multiplier` | 3.0 | MAD multiplier for price anomaly alerts |
 | `clob_token_ids` | - | Optional: Override CLOB token IDs (auto-detected from events) |
+| `detectors` | all | Detectors to enable (see [docs/detectors.md](docs/detectors.md)) |
 
 3. Set environment variables for Telegram:
 ```bash
@@ -95,29 +96,19 @@ The bot will:
 
 Press `Ctrl+C` to gracefully stop the bot.
 
-## LVR Liquidity Detection
+## Detectors
 
-The bot calculates the Liquidity-to-Volume Ratio (LVR) to identify potential liquidity risks:
+Polybotz uses modular detectors to identify different types of market anomalies. All detectors can be individually enabled/disabled via `detectors` config or `POLYBOTZ_DETECTORS` env var.
 
-```
-LVR = 24h Volume / Total Liquidity
-```
+| Detector | Description | Configuration |
+|----------|-------------|---------------|
+| `spike` | Price spike detection exceeding threshold | `spike_threshold` |
+| `lvr` | Liquidity-to-Volume Ratio analysis for liquidity warnings | `lvr_threshold` |
+| `zscore` | Z-score based volume anomaly detection via CLOB API | `zscore_threshold` |
+| `mad` | Median Absolute Deviation price anomaly via CLOB API | `mad_multiplier` |
+| `closed` | Closed market detection with auto-removal | None |
 
-### Health Classification
-
-| LVR Range | Status | Meaning |
-|-----------|--------|---------|
-| < 2.0 | Healthy | Normal liquidity conditions |
-| 2.0 - 10.0 | Elevated | Moderate trading pressure |
-| >= 10.0 | High Risk | Severe liquidity imbalance |
-
-### Liquidity Warnings
-
-A **Liquidity Warning** is triggered when both conditions are met:
-1. Price change exceeds `spike_threshold`
-2. LVR exceeds `lvr_threshold`
-
-This helps identify price movements that may be driven by low liquidity rather than genuine market sentiment.
+See [docs/detectors.md](docs/detectors.md) for detailed documentation on all detectors, configuration options, and health classifications.
 
 ## Z-Score/MAD Statistical Detection
 
@@ -205,6 +196,7 @@ docker run -d \
   -e POLYBOTZ_LVR_THRESHOLD="8.0" \
   -e POLYBOTZ_ZSCORE_THRESHOLD="3.5" \
   -e POLYBOTZ_MAD_MULTIPLIER="3.0" \
+  -e POLYBOTZ_DETECTORS="spike,lvr" \
   ghcr.io/pab1it0/polybotz:latest
 ```
 
@@ -241,8 +233,11 @@ The container supports two configuration modes:
 | `POLYBOTZ_LVR_THRESHOLD` | No | 8.0 | LVR threshold for warnings |
 | `POLYBOTZ_ZSCORE_THRESHOLD` | No | 3.5 | Z-score threshold for volume alerts |
 | `POLYBOTZ_MAD_MULTIPLIER` | No | 3.0 | MAD multiplier for price alerts |
+| `POLYBOTZ_DETECTORS` | No | all | Detectors to enable: "all", "none", or comma-separated list |
 
 *Required only when not using a config file
+
+**Note**: `POLYBOTZ_DETECTORS` takes precedence over config file setting when both are present.
 
 ### Container Operations
 

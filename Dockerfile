@@ -58,7 +58,21 @@ ENV PATH="/app/.venv/bin:$PATH"
 #     -e POLYBOTZ_LVR_THRESHOLD="8.0" \
 #     -e POLYBOTZ_ZSCORE_THRESHOLD="3.5" \
 #     -e POLYBOTZ_MAD_MULTIPLIER="3.0" \
+#     -e POLYBOTZ_DETECTORS="spike,lvr" \
 #     ghcr.io/pab1it0/polybotz:latest
+#
+# Environment Variables:
+#   POLYBOTZ_SLUGS          - Comma-separated event slugs (required)
+#   TELEGRAM_BOT_TOKEN      - Telegram bot API token (required)
+#   TELEGRAM_CHAT_ID        - Telegram chat ID (required)
+#   POLYBOTZ_POLL_INTERVAL  - Seconds between polls (default: 60)
+#   POLYBOTZ_SPIKE_THRESHOLD - Percentage for spike alerts (default: 5.0)
+#   POLYBOTZ_LVR_THRESHOLD  - LVR threshold for warnings (default: 8.0)
+#   POLYBOTZ_ZSCORE_THRESHOLD - Z-score threshold for volume alerts (default: 3.5)
+#   POLYBOTZ_MAD_MULTIPLIER - MAD multiplier for price alerts (default: 3.0)
+#   POLYBOTZ_DETECTORS      - Detectors to enable: "all", "none", or comma-separated
+#                             list like "spike,lvr" (default: all)
+#                             Note: Overrides config file setting when set
 #
 # Note: CLOB token IDs are auto-extracted from monitored events.
 # To override, set POLYBOTZ_CLOB_TOKEN_IDS="token1,token2"

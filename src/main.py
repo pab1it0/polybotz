@@ -72,39 +72,45 @@ async def run_poll_cycle(
     # Fetch raw data first (before updating state)
     raw_data = await fetch_all_events_raw(client, list(events.keys()))
 
-    # Detect closed markets BEFORE updating state
-    closed_alerts, slugs_to_remove = detect_closed_markets(events, raw_data)
+    # Check if closed detector is enabled
+    if "closed" in config.detectors:
+        # Detect closed markets BEFORE updating state
+        closed_alerts, slugs_to_remove = detect_closed_markets(events, raw_data)
 
-    # Send alerts for closed markets
-    if closed_alerts:
-        logger.info(f"Detected {len(closed_alerts)} closed market(s)")
-        await send_all_closed_event_alerts(closed_alerts, config)
+        # Send alerts for closed markets
+        if closed_alerts:
+            logger.info(f"Detected {len(closed_alerts)} closed market(s)")
+            await send_all_closed_event_alerts(closed_alerts, config)
 
-    # Remove fully-closed events from monitoring
-    for slug in slugs_to_remove:
-        logger.info(f"Removing closed event from monitoring: {slug}")
-        del events[slug]
+        # Remove fully-closed events from monitoring
+        for slug in slugs_to_remove:
+            logger.info(f"Removing closed event from monitoring: {slug}")
+            del events[slug]
 
     # Poll all Gamma API events (updates remaining events)
     events = await poll_all_events(client, events)
 
-    # Detect spikes from Gamma API
-    spikes = detect_all_spikes(list(events.values()), config.spike_threshold)
+    # Check if spike detector is enabled
+    if "spike" in config.detectors:
+        # Detect spikes from Gamma API
+        spikes = detect_all_spikes(list(events.values()), config.spike_threshold)
 
-    if spikes:
-        logger.info(f"Detected {len(spikes)} spike(s)")
-        await send_all_alerts(spikes, config)
+        if spikes:
+            logger.info(f"Detected {len(spikes)} spike(s)")
+            await send_all_alerts(spikes, config)
 
-        # Detect liquidity warnings for spikes with high LVR
-        warnings = detect_all_liquidity_warnings(
-            list(events.values()),
-            spikes,
-            config.lvr_threshold,
-        )
-        if warnings:
-            await send_all_liquidity_warnings(warnings, config)
-    else:
-        logger.debug("No spikes detected")
+            # Check if LVR detector is enabled
+            if "lvr" in config.detectors:
+                # Detect liquidity warnings for spikes with high LVR
+                warnings = detect_all_liquidity_warnings(
+                    list(events.values()),
+                    spikes,
+                    config.lvr_threshold,
+                )
+                if warnings:
+                    await send_all_liquidity_warnings(warnings, config)
+        else:
+            logger.debug("No spikes detected")
 
     # Poll CLOB markets - use config override or extract from events
     clob_token_ids = config.clob_token_ids if config.clob_token_ids else extract_clob_token_ids(events)
@@ -152,17 +158,21 @@ async def run_clob_poll_cycle(
             f"(need {min_obs} observations)"
         )
 
-    # Detect Z-score alerts (volume spikes)
-    zscore_alerts = detect_all_zscore_alerts(market_stats, config.zscore_threshold)
-    if zscore_alerts:
-        logger.info(f"Detected {len(zscore_alerts)} Z-score alert(s)")
-        await send_all_zscore_alerts(zscore_alerts, config)
+    # Check if zscore detector is enabled
+    if "zscore" in config.detectors:
+        # Detect Z-score alerts (volume spikes)
+        zscore_alerts = detect_all_zscore_alerts(market_stats, config.zscore_threshold)
+        if zscore_alerts:
+            logger.info(f"Detected {len(zscore_alerts)} Z-score alert(s)")
+            await send_all_zscore_alerts(zscore_alerts, config)
 
-    # Detect MAD alerts (price anomalies)
-    mad_alerts = detect_all_mad_alerts(market_stats, config.mad_multiplier)
-    if mad_alerts:
-        logger.info(f"Detected {len(mad_alerts)} MAD alert(s)")
-        await send_all_mad_alerts(mad_alerts, config)
+    # Check if mad detector is enabled
+    if "mad" in config.detectors:
+        # Detect MAD alerts (price anomalies)
+        mad_alerts = detect_all_mad_alerts(market_stats, config.mad_multiplier)
+        if mad_alerts:
+            logger.info(f"Detected {len(mad_alerts)} MAD alert(s)")
+            await send_all_mad_alerts(mad_alerts, config)
 
 
 async def main_async() -> int:
@@ -186,6 +196,12 @@ async def main_async() -> int:
     except ConfigurationError as e:
         logger.error(f"Configuration error: {e}")
         return 1
+
+    # Log enabled detectors
+    if config.detectors:
+        logger.info(f"Enabled detectors: {', '.join(sorted(config.detectors))}")
+    else:
+        logger.info("No detectors enabled (monitoring only mode)")
 
     # Validate slugs on startup
     logger.info(f"Validating {len(config.slugs)} configured slugs...")
